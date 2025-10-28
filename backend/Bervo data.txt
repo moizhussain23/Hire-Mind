@@ -1,0 +1,8 @@
+Bervo code name : @
+Value : brevo-code:a3804b2fde3bb9bae8a27f97551496d0
+DKIM1 Name : brevo1._domainkey
+      Value : b1.hiremind-com.dkim.brevo.com
+DKIM2 Name : brevo2._domainkey
+      Value : b2.hiremind-com.dkim.brevo.com
+DMARC Name : _dmarc
+      Value : v=DMARC1; p=none; rua=mailto:rua@dmarc.brevo.com
