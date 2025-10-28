@@ -95,9 +95,8 @@ public
 tmp/
 temp/
 
-# Sensitive configuration files
-docs/Config.md
-docs/Config/
+# Documentation folder (excluded from public repo)
+docs/
 config/
 configuration/
 

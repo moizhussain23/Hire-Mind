@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # 🧠 Hire Mind - AI-Powered Interview Platform
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -151,7 +150,3 @@ Hire Mind is a cutting-edge web-based AI interview platform designed to revoluti
 Hire Mind empowers organizations to make better hiring decisions through intelligent AI-driven interviews. Experience the future of recruitment with our comprehensive, secure, and scalable platform.
 
 *Built with ❤️ for the future of hiring*
-=======
-# Hire-Mind
-HireMind is a web-based AI interview system designed to help companies assess candidates beyond resumes. The platform simulates real interview environments using AI voice interaction, enabling objective, bias-free hiring while improving recruiter efficiency.
->>>>>>> 573dcdd7cc3f34905a871dbaef29f32e715e120b
