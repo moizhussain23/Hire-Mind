@@ -20,43 +20,74 @@ interface TTSOptions {
  * Falls back to ElevenLabs if Gemini fails (FREE, 10K chars/month, no credit card)
  * Returns audio buffer that can be sent to frontend
  */
+// Simple in-memory cache for TTS (max 50 entries)
+const ttsCache = new Map<string, Buffer>();
+const MAX_CACHE_SIZE = 50;
+
+function getCacheKey(text: string): string {
+  return text.toLowerCase().trim().substring(0, 200); // Use first 200 chars as key
+}
+
 export async function generateSpeech(options: TTSOptions): Promise<Buffer> {
+  const startTime = Date.now();
+  
   try {
     const { text } = options;
+    const cacheKey = getCacheKey(text);
 
-    console.log(`🎤 Generating speech for: "${text.substring(0, 50)}..."`);
+    // Check cache first
+    if (ttsCache.has(cacheKey)) {
+      console.log(`💾 TTS cache hit (${Date.now() - startTime}ms)`);
+      return ttsCache.get(cacheKey)!;
+    }
+
+    console.log(`🎤 Generating speech (${text.length} chars)...`);
+
+    let audioBuffer: Buffer | null = null;
 
     // Try Gemini Native TTS first (FREE, professional voice)
     if (process.env.GEMINI_API_KEY) {
       try {
-        console.log('🎵 Using Gemini Native TTS (Primary - FREE, professional)');
-        const audioBuffer = await geminiTTSService.generateSpeech({
+        console.log('🎵 Using Gemini TTS...');
+        audioBuffer = await geminiTTSService.generateSpeech({
           text,
           voiceName: 'professional'
         });
-        console.log(`✅ Gemini TTS success: ${audioBuffer.length} bytes`);
-        return audioBuffer;
+        console.log(`✅ Gemini TTS: ${audioBuffer.length} bytes in ${Date.now() - startTime}ms`);
       } catch (error: any) {
-        console.error('❌ Gemini TTS failed, trying ElevenLabs...', error.message);
+        console.error(`❌ Gemini TTS failed (${Date.now() - startTime}ms), trying ElevenLabs...`);
       }
     }
 
-    // Fall back to ElevenLabs (FREE, 10K chars/month)
-    if (process.env.ELEVENLABS_API_KEY) {
+    // Fall back to ElevenLabs if Gemini failed or not configured
+    if (!audioBuffer && process.env.ELEVENLABS_API_KEY) {
       try {
-        console.log('🎵 Using ElevenLabs TTS (Fallback - FREE, 10K chars/month)');
-        const audioBuffer = await elevenlabsService.generateSpeechWithPreset(
+        console.log('🎵 Using ElevenLabs TTS...');
+        audioBuffer = await elevenlabsService.generateSpeechWithPreset(
           text,
           'AIRA_PROFESSIONAL'
         );
-        console.log(`✅ ElevenLabs success: ${audioBuffer.length} bytes`);
-        return audioBuffer;
+        console.log(`✅ ElevenLabs: ${audioBuffer.length} bytes in ${Date.now() - startTime}ms`);
       } catch (error: any) {
         console.error('❌ ElevenLabs error:', error.message);
       }
     }
 
-    throw new Error('No TTS service configured. Please set GEMINI_API_KEY or ELEVENLABS_API_KEY');
+    if (!audioBuffer) {
+      throw new Error('No TTS service configured. Please set GEMINI_API_KEY or ELEVENLABS_API_KEY');
+    }
+
+    // Cache the result
+    if (ttsCache.size >= MAX_CACHE_SIZE) {
+      // Remove oldest entry
+      const firstKey = ttsCache.keys().next().value;
+      if (firstKey) {
+        ttsCache.delete(firstKey);
+      }
+    }
+    ttsCache.set(cacheKey, audioBuffer);
+
+    return audioBuffer;
 
   } catch (error: any) {
     console.error('❌ TTS error:', error);

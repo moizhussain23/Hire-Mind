@@ -557,29 +557,16 @@ export default function AIInterviewSystemV2({
       const validationData = await validation.json();
       const analysis = validationData.data;
 
-      console.log('📊 Answer analysis:', analysis);
+      console.log('📊 Answer evaluation:', {
+        quality: analysis.quality,
+        score: analysis.qualityScore,
+        followUpType: analysis.followUpType
+      });
 
-      // Use smart evaluation response
-      let aiResponseText = '';
-      
-      if (analysis.suggestedFollowUp) {
-        // Use AI-generated follow-up question
-        aiResponseText = analysis.suggestedFollowUp;
-      } else if (analysis.responsePhrase) {
-        // Use response phrase from evaluation
-        aiResponseText = analysis.responsePhrase;
-      } else {
-        // Fallback based on quality score
-        if (analysis.qualityScore < 40) {
-          aiResponseText = "Could you elaborate on that a bit more? I'd like to understand your thinking better.";
-        } else if (analysis.qualityScore >= 80) {
-          aiResponseText = "Excellent answer! That shows strong understanding. Let's move to the next question.";
-        } else if (analysis.qualityScore >= 60) {
-          aiResponseText = "Good. I appreciate your insight. Let's continue.";
-        } else {
-          aiResponseText = "I see. Let's move on to the next question.";
-        }
-      }
+      // Use the AI-generated professional response
+      const aiResponseText = analysis.aiResponseText || analysis.professionalResponse || 
+        analysis.suggestedFollowUp || analysis.responsePhrase || 
+        "Thank you. Let's continue.";
 
       // Add AI response to messages
       const aiResponse: Message = {
@@ -591,18 +578,25 @@ export default function AIInterviewSystemV2({
       };
 
       setMessages(prev => [...prev, aiResponse]);
-      await speakWithBackendAudio(aiResponseText);
       
-      // Note: speakWithBackendAudio -> playAudioFromBase64 will auto-start listening
-      // So we don't need to manually call startListening() here
+      // Use pre-generated audio if available, otherwise generate on-the-fly
+      if (analysis.followUpAudio) {
+        console.log('🎵 Using pre-generated audio from backend');
+        await playAudioFromBase64(analysis.followUpAudio);
+      } else {
+        await speakWithBackendAudio(aiResponseText);
+      }
+      
+      // Note: playAudioFromBase64 will auto-start listening after audio ends
 
-      // Decide next action
-      if (analysis.needsFollowUp && analysis.qualityScore < 60) {
+      // Decide next action based on evaluation
+      if (analysis.needsFollowUp && analysis.followUpType !== 'next-topic') {
         // Ask follow-up, don't increment question count
-        console.log('🔄 Asking follow-up question...');
+        console.log(`🔄 Follow-up needed (${analysis.followUpType})`);
         // Listening will start automatically after AI speaks
       } else {
         // Move to next question
+        console.log('✅ Answer complete, moving to next question');
         setQuestionCount(prev => prev + 1);
         
         if (questionCount + 1 < 5) {

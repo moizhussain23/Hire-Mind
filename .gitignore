@@ -97,13 +97,19 @@ temp/
 
 # Documentation folder (excluded from public repo)
 docs/
+docs/*
 config/
 configuration/
 
 # Scripts and utilities (exclude from public repo)
 scripts/
+scripts/*
 backend/scripts/
+backend/scripts/*
 unknow/
+unknow/*
+unknown/
+unknown/*
 
 # Database files
 *.db

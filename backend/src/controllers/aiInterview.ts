@@ -211,15 +211,40 @@ export async function validateAnswer(req: Request, res: Response): Promise<void>
       previousQuestions
     });
 
-    // Generate audio for follow-up if needed
-    let followUpAudio = null;
-    if (evaluation.needsFollowUp && evaluation.suggestedFollowUp) {
-      const audioBuffer = await generateSpeechWithPreset(
-        evaluation.suggestedFollowUp, 
-        'AIRA_PROFESSIONAL'
-      );
-      followUpAudio = audioBuffer.toString('base64');
+    console.log('📊 Answer evaluation:', evaluation);
+
+    // Use professional AI-generated response
+    let aiResponseText = '';
+    
+    // Priority 1: Use the professional response from AI evaluation
+    if (evaluation.professionalResponse) {
+      aiResponseText = evaluation.professionalResponse;
+    } 
+    // Priority 2: Use suggested follow-up if available
+    else if (evaluation.suggestedFollowUp) {
+      aiResponseText = `${evaluation.acknowledgment || 'I see.'} ${evaluation.suggestedFollowUp}`;
+    } 
+    // Priority 4: Fallback based on quality score
+    else {
+      if (evaluation.score >= 90) {
+        aiResponseText = "Excellent! That's exactly the kind of insight I was looking for. Let's move forward.";
+      } else if (evaluation.score >= 75) {
+        aiResponseText = "Great answer! I appreciate the detail you provided. Let's continue.";
+      } else if (evaluation.score >= 60) {
+        aiResponseText = "Good. Thank you for sharing that perspective.";
+      } else if (evaluation.score >= 40) {
+        aiResponseText = "I see. Could you elaborate a bit more on that?";
+      } else {
+        aiResponseText = "I understand. Let's explore this from a different angle.";
+      }
     }
+
+    // Generate audio for the response
+    const audioBuffer = await generateSpeechWithPreset(
+      aiResponseText, 
+      'AIRA_PROFESSIONAL'
+    );
+    const followUpAudio = audioBuffer.toString('base64');
 
     res.json({
       success: true,
@@ -230,6 +255,9 @@ export async function validateAnswer(req: Request, res: Response): Promise<void>
         needsFollowUp: evaluation.needsFollowUp,
         followUpType: evaluation.followUpType,
         suggestedFollowUp: evaluation.suggestedFollowUp,
+        acknowledgment: evaluation.acknowledgment,
+        professionalResponse: evaluation.professionalResponse,
+        aiResponseText,
         followUpAudio,
         // Legacy fields for compatibility
         isComplete: evaluation.quality === 'excellent' || evaluation.quality === 'good',

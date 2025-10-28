@@ -47,7 +47,19 @@ function createWavHeader(pcmDataLength: number): Buffer {
  * Generate speech using Gemini Native TTS (@google/genai SDK)
  * Returns professional interviewer voice
  */
+// Reuse client instance for better performance
+let clientInstance: any = null;
+
+function getClient() {
+  if (!clientInstance) {
+    clientInstance = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+  }
+  return clientInstance;
+}
+
 export async function generateSpeech(options: TTSOptions): Promise<Buffer> {
+  const startTime = Date.now();
+  
   try {
     const { text } = options;
 
@@ -55,31 +67,32 @@ export async function generateSpeech(options: TTSOptions): Promise<Buffer> {
       throw new Error('GEMINI_API_KEY not configured');
     }
 
-    console.log(`🎤 Generating speech with Gemini TTS: "${text.substring(0, 50)}..."`);
+    console.log(`🎤 Generating speech (${text.length} chars)...`);
 
-    // Initialize Gemini client
-    const client = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+    // Use cached client instance
+    const client = getClient();
 
-    // Create professional interviewer prompt
-    const prompt = `Say this in a warm, professional, and friendly interviewer tone: "${text}"`;
+    // Generate audio with timeout (10 seconds max)
+    const timeoutPromise = new Promise((_, reject) => 
+      setTimeout(() => reject(new Error('TTS timeout after 10s')), 10000)
+    );
 
-    // Generate audio
-    const result = await client.models.generateContent({
+    const generatePromise = client.models.generateContent({
       model: 'gemini-2.5-flash-preview-tts',
       contents: [{
-        parts: [{ text: prompt }]
+        parts: [{ text }] // Send text directly without extra prompt
       }],
       config: {
         responseModalities: ['AUDIO']
       }
     });
 
+    const result = await Promise.race([generatePromise, timeoutPromise]) as any;
+
     // Extract audio data from response
-    // Based on testing, the structure is: result.candidates[0].content.parts[0].inlineData.data
-    const audioData = (result as any).candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+    const audioData = result.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
     
     if (!audioData) {
-      console.error('Response structure:', JSON.stringify(result, null, 2));
       throw new Error('No audio data in Gemini response');
     }
 
@@ -90,11 +103,13 @@ export async function generateSpeech(options: TTSOptions): Promise<Buffer> {
     const wavHeader = createWavHeader(pcmData.length);
     const wavBuffer = Buffer.concat([wavHeader, pcmData]);
 
-    console.log(`✅ Gemini TTS speech generated: ${wavBuffer.length} bytes (24kHz, 16-bit, mono)`);
+    const duration = Date.now() - startTime;
+    console.log(`✅ TTS generated in ${duration}ms (${wavBuffer.length} bytes)`);
     return wavBuffer;
 
   } catch (error: any) {
-    console.error('❌ Gemini TTS error:', error.message);
+    const duration = Date.now() - startTime;
+    console.error(`❌ Gemini TTS error after ${duration}ms:`, error.message);
     throw new Error(`Gemini TTS failed: ${error.message}`);
   }
 }
