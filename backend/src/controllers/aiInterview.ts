@@ -1,6 +1,8 @@
 import { Request, Response } from 'express';
 import { generateInterviewQuestion, scoreInterview, evaluateAnswer, model } from '../services/geminiService';
 import { generateSpeechWithPreset } from '../services/ttsService';
+import { generateHumanLikeSpeech, generateFollowUpQuestion, generateOpeningGreeting } from '../services/enhancedTTSService';
+import { calculateThinkingDelay, sleep, getThinkingMessage } from '../utils/responseDelayManager';
 
 /**
  * Generate next interview question
@@ -15,6 +17,7 @@ export async function generateQuestion(req: Request, res: Response): Promise<voi
       experienceLevel,
       resumeData,
       previousAnswers = [],
+      previousQuestions = [],
       questionNumber = 0,
       interviewPhase = 'behavioral'
     } = req.body;
@@ -28,6 +31,7 @@ export async function generateQuestion(req: Request, res: Response): Promise<voi
       return;
     }
 
+    console.log(`\n${'='.repeat(60)}`);
     console.log(`🤖 Generating question #${questionNumber} for ${candidateName}`);
 
     // Generate question using Gemini
@@ -38,12 +42,30 @@ export async function generateQuestion(req: Request, res: Response): Promise<voi
       experienceLevel,
       resumeData,
       previousAnswers,
+      previousQuestions, // Pass previous questions to prevent repetition
       questionNumber,
       interviewPhase
     });
 
-    // Generate speech audio using Google TTS
-    const audioBuffer = await generateSpeechWithPreset(questionText, 'AIRA_PROFESSIONAL');
+    // Generate speech with human-like qualities
+    let audioBuffer: Buffer;
+    if (questionNumber === 0) {
+      // Opening greeting with warmth
+      audioBuffer = await generateOpeningGreeting(candidateName, position);
+    } else {
+      // Regular question with natural flow
+      audioBuffer = await generateHumanLikeSpeech({
+        text: questionText,
+        emotionalContext: {
+          questionType: interviewPhase as 'technical' | 'behavioral',
+          candidateEmotion: 'neutral'
+        },
+        previousContext: previousAnswers[previousAnswers.length - 1],
+        addHumanization: true,
+        addNaturalPauses: true,
+        variableSpeed: true
+      });
+    }
 
     // Convert buffer to base64 for easy transmission
     const audioBase64 = audioBuffer.toString('base64');
@@ -202,7 +224,21 @@ export async function validateAnswer(req: Request, res: Response): Promise<void>
       return;
     }
 
+    console.log(`\n${'='.repeat(60)}`);
     console.log(`🔍 Evaluating answer #${questionNumber} for ${position}`);
+
+    // Calculate realistic thinking delay
+    const thinkingDelay = calculateThinkingDelay({
+      answerLength: answer.length,
+      answerQuality: undefined, // Will be determined after evaluation
+      questionType: 'behavioral',
+      complexity: 'medium'
+    });
+
+    console.log(`⏱️ Adding ${Math.round(thinkingDelay / 1000)}s thinking delay for realism...`);
+
+    // Add realistic delay (AIRA is "thinking")
+    await sleep(thinkingDelay);
 
     // Evaluate answer using smart AI evaluation
     const evaluation = await evaluateAnswer(question, answer, {
@@ -212,6 +248,11 @@ export async function validateAnswer(req: Request, res: Response): Promise<void>
     });
 
     console.log('📊 Answer evaluation:', evaluation);
+    console.log(`   Quality: ${evaluation.quality} (${evaluation.score}/100)`);
+    console.log(`   Needs Follow-up: ${evaluation.needsFollowUp ? 'Yes' : 'No'}`);
+    if (evaluation.suggestedFollowUp) {
+      console.log(`   Follow-up: ${evaluation.suggestedFollowUp.substring(0, 80)}...`);
+    }
 
     // Use professional AI-generated response
     let aiResponseText = '';
@@ -239,11 +280,21 @@ export async function validateAnswer(req: Request, res: Response): Promise<void>
       }
     }
 
-    // Generate audio for the response
-    const audioBuffer = await generateSpeechWithPreset(
-      aiResponseText, 
-      'AIRA_PROFESSIONAL'
-    );
+    // Generate human-like speech with emotional intelligence
+    console.log('🎤 Generating human-like response with emotional tone...');
+    const audioBuffer = await generateHumanLikeSpeech({
+      text: aiResponseText,
+      emotionalContext: {
+        answerQuality: evaluation.quality as 'excellent' | 'good' | 'average' | 'poor',
+        questionType: 'behavioral',
+        candidateEmotion: evaluation.score < 50 ? 'nervous' : 'confident'
+      },
+      previousContext: answer.substring(0, 150),
+      addHumanization: true,
+      addNaturalPauses: true,
+      variableSpeed: true
+    });
+
     const followUpAudio = audioBuffer.toString('base64');
 
     res.json({

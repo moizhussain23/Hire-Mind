@@ -24,7 +24,11 @@ const upload = multer({
   }
 });
 
-// All routes require authentication
+// Test endpoint - no auth required (for test interview page)
+// MUST be before authenticateToken middleware
+router.post('/test/upload', upload.single('resume'), uploadResume);
+
+// All other routes require authentication
 router.use(authenticateToken);
 
 // Upload and parse resume

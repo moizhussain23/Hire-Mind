@@ -43,8 +43,6 @@ export async function generateSpeech(options: TTSOptions): Promise<Buffer> {
       throw new Error('ELEVENLABS_API_KEY not configured');
     }
 
-    console.log(`🎤 Generating speech with ElevenLabs: "${text.substring(0, 50)}..."`);
-
     const response = await axios.post(
       `${ELEVENLABS_API_URL}/text-to-speech/${voiceId}`,
       {
@@ -66,12 +64,10 @@ export async function generateSpeech(options: TTSOptions): Promise<Buffer> {
     );
 
     const audioBuffer = Buffer.from(response.data);
-    console.log(`✅ Speech generated: ${audioBuffer.length} bytes`);
-
     return audioBuffer;
 
   } catch (error: any) {
-    console.error('❌ ElevenLabs TTS error:', error.response?.data || error.message);
+    console.error('[TTS] ElevenLabs error:', error.message);
     throw new Error(`Failed to generate speech: ${error.message}`);
   }
 }
@@ -136,7 +132,7 @@ export async function getAvailableVoices(): Promise<any[]> {
 
     return response.data.voices || [];
   } catch (error: any) {
-    console.error('❌ Error fetching voices:', error);
+    // Silently fail
     return [];
   }
 }
@@ -162,7 +158,7 @@ export async function getSubscriptionInfo(): Promise<{
       canExtendCharacterLimit: response.data.can_extend_character_limit
     };
   } catch (error: any) {
-    console.error('❌ Error fetching subscription info:', error);
+    // Silently fail
     return {
       characterCount: 0,
       characterLimit: 10000,
@@ -206,17 +202,13 @@ export async function batchGenerateSpeech(
   preset: keyof typeof VoicePresets = 'AIRA_PROFESSIONAL'
 ): Promise<Buffer[]> {
   try {
-    console.log(`🎤 Batch generating speech for ${texts.length} texts`);
-    
     const audioBuffers = await Promise.all(
       texts.map(text => generateSpeechWithPreset(text, preset))
     );
-    
-    console.log(`✅ Batch generation complete: ${audioBuffers.length} audio files`);
     return audioBuffers;
 
   } catch (error: any) {
-    console.error('❌ Batch generation error:', error);
+    console.error('[TTS] Batch generation error:', error.message);
     throw error;
   }
 }

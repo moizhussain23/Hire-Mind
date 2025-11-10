@@ -2,12 +2,33 @@ import { useState, useEffect, useRef } from 'react';
 import { Mic, MicOff, Video, VideoOff, Play, Loader, Volume2, Copy } from 'lucide-react';
 import Editor from '@monaco-editor/react';
 import CameraMicTest from './CameraMicTest';
+import ThinkingIndicator from './ThinkingIndicator';
+import MicLevelIndicator from './MicLevelIndicator';
+import SynchronizedText from './SynchronizedText';
+import TypingIndicator from './TypingIndicator';
+import InterviewConfirmDialog from './InterviewConfirmDialog';
+import RealTimeTranscription from './RealTimeTranscription';
+
+interface ParsedResume {
+  skills: string[];
+  experience: string[];
+  education: string[];
+  projects: string[];
+  summary: string;
+  contactInfo?: {
+    email?: string;
+    phone?: string;
+    linkedin?: string;
+    github?: string;
+  };
+}
 
 interface AIInterviewSystemV2Props {
   interviewId: string;
   candidateName: string;
   position: string;
   resumeUrl: string;
+  resumeData?: ParsedResume | null; // Parsed resume data
   skillCategory: 'technical' | 'non-technical';
   experienceLevel: 'fresher' | 'mid-level' | 'senior';
   interviewType: 'Video Only' | 'Voice Only' | 'Both';
@@ -47,6 +68,7 @@ export default function AIInterviewSystemV2({
   candidateName,
   position,
   resumeUrl,
+  resumeData,
   skillCategory,
   experienceLevel,
   interviewType,
@@ -63,6 +85,9 @@ export default function AIInterviewSystemV2({
   
   // Interview state
   const [isStarted, setIsStarted] = useState(false);
+  const [showCountdown, setShowCountdown] = useState(false);
+  const [countdown, setCountdown] = useState(5);
+  const [isPreloading, setIsPreloading] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [currentQuestion, setCurrentQuestion] = useState('');
   const [isListening, setIsListening] = useState(false);
@@ -71,6 +96,20 @@ export default function AIInterviewSystemV2({
   const [startTime, setStartTime] = useState<number>(0);
   const [elapsedTime, setElapsedTime] = useState(0);
   const [questionCount, setQuestionCount] = useState(0);
+  const [recordingTime, setRecordingTime] = useState(0);
+  const [isReadyForUser, setIsReadyForUser] = useState(false); // Clear state when user can speak
+  const [isPaused, setIsPaused] = useState(false); // Pause state for voice commands
+  const [audioLevels, setAudioLevels] = useState<number[]>([]); // For waveform visualization
+  const pauseAudioRef = useRef<HTMLAudioElement | null>(null); // Reference to current audio for pausing
+  const recordingTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const maxRecordingTimeRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // New state for enhanced features
+  const [showEndConfirm, setShowEndConfirm] = useState(false);
+  const [interimTranscript, setInterimTranscript] = useState('');
+  const [transcriptConfidence, setTranscriptConfidence] = useState(0);
+  const [currentAudioElement, setCurrentAudioElement] = useState<HTMLAudioElement | null>(null);
+  const [lastAnswerLength, setLastAnswerLength] = useState(0);
   
   // Interview phase state
   const [interviewPhase, setInterviewPhase] = useState<'behavioral' | 'technical'>('behavioral');
@@ -110,6 +149,13 @@ export default function AIInterviewSystemV2({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<any>(null);
   const synthRef = useRef<SpeechSynthesis | null>(null);
+  const finalTranscriptRef = useRef<string>(''); // Store final transcript for manual stop
+  const voiceCommandDetectionRef = useRef(false); // Prevent duplicate command processing
+  const processingTimeoutRef = useRef<NodeJS.Timeout | null>(null); // Safety timeout for processing state
+  const isGeneratingQuestionRef = useRef(false); // Prevent multiple question generations
+  const audioContextRef = useRef<AudioContext | null>(null); // For audio visualization
+  const analyserRef = useRef<AnalyserNode | null>(null); // For audio visualization
+  const animationFrameRef = useRef<number | null>(null); // For waveform animation
 
   // Initialize speech synthesis
   useEffect(() => {
@@ -117,6 +163,52 @@ export default function AIInterviewSystemV2({
       synthRef.current = window.speechSynthesis;
     }
   }, []);
+
+  // Keyboard shortcuts for enhanced accessibility (invisible but available)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Only trigger if not typing in input/code editor
+      const target = e.target as HTMLElement;
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
+        return;
+      }
+
+      // Space: Pause/Resume (only during listening)
+      if (e.code === 'Space' && !e.repeat && isListening) {
+        e.preventDefault();
+        if (isPaused) {
+          setIsPaused(false);
+          startListening();
+        } else {
+          setIsPaused(true);
+          if (recognitionRef.current) {
+            recognitionRef.current.stop();
+          }
+        }
+      }
+
+      // Escape: Emergency stop (stop listening immediately)
+      if (e.code === 'Escape' && isListening) {
+        e.preventDefault();
+        if (recognitionRef.current) {
+          recognitionRef.current.stop();
+        }
+        const transcript = finalTranscriptRef.current;
+        if (transcript) {
+          handleCandidateResponse(transcript);
+        }
+      }
+
+      // Enter: Skip question (only if not in input)
+      if (e.code === 'Enter' && !isListening && !isAISpeaking && !isProcessing) {
+        e.preventDefault();
+        skipQuestion();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isListening, isPaused, isAISpeaking, isProcessing]);
 
   // Auto-scroll messages
   useEffect(() => {
@@ -176,27 +268,206 @@ export default function AIInterviewSystemV2({
     }
   };
 
-  // Speech recognition
+  // Speech recognition with smart timeout
   const initializeSpeechRecognition = () => {
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition) return null;
 
     const recognition = new SpeechRecognition();
-    recognition.continuous = false;
-    recognition.interimResults = false;
+    recognition.continuous = true; // Keep listening for long answers
+    recognition.interimResults = true; // Detect when user is speaking
     recognition.lang = 'en-US';
 
+    let finalTranscript = '';
+    let silenceTimer: NodeJS.Timeout | null = null;
+
     recognition.onresult = (event: any) => {
-      const transcript = event.results[0][0].transcript;
-      handleCandidateResponse(transcript);
+      let interimTranscript = '';
+      let confidence = 0;
+      
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const transcript = event.results[i][0].transcript;
+        confidence = event.results[i][0].confidence || 0;
+        
+        if (event.results[i].isFinal) {
+          finalTranscript += transcript + ' ';
+          // Update ref so it's accessible when manually stopped
+          finalTranscriptRef.current = finalTranscript.trim();
+        } else {
+          interimTranscript += transcript;
+        }
+      }
+      
+      // Update interim transcript state for real-time display
+      setInterimTranscript(interimTranscript);
+      setTranscriptConfidence(confidence);
+
+      // Combine final + interim for better capture
+      const combinedText = finalTranscript.trim() 
+        ? (finalTranscript.trim() + ' ' + interimTranscript.trim()).trim()
+        : interimTranscript.trim();
+      if (combinedText) {
+        finalTranscriptRef.current = combinedText;
+      }
+
+      // Check for voice commands in real-time (ONLY on final results to prevent duplicates)
+      // This prevents "I don't know" from triggering multiple times
+      if (combinedText && !voiceCommandDetectionRef.current && finalTranscript.trim()) {
+        const command = detectVoiceCommands(combinedText);
+        if (command) {
+          voiceCommandDetectionRef.current = true; // Prevent duplicate processing
+          console.log(`🎯 Voice command detected: ${command} - processing once`);
+          
+          if (command === 'stop') {
+            console.log('🛑 Stop command detected, submitting immediately');
+            if (silenceTimer) clearTimeout(silenceTimer);
+            recognition.stop();
+            setTimeout(() => {
+              // Use the full combined text for submission
+              const textToSubmit = combinedText.trim();
+              if (textToSubmit) {
+                handleCandidateResponse(textToSubmit);
+              }
+              finalTranscript = '';
+              finalTranscriptRef.current = '';
+              voiceCommandDetectionRef.current = false;
+            }, 100);
+            return;
+          } else if (command === 'skip') {
+            console.log('⏭️ Skip command detected, skipping question');
+            if (silenceTimer) clearTimeout(silenceTimer);
+            recognition.stop();
+            setTimeout(() => {
+              skipQuestion();
+              finalTranscript = '';
+              finalTranscriptRef.current = '';
+              voiceCommandDetectionRef.current = false;
+            }, 100);
+            return;
+          } else if (command === 'repeat') {
+            console.log('🔁 Repeat command detected, replaying question');
+            if (silenceTimer) clearTimeout(silenceTimer);
+            recognition.stop();
+            setTimeout(() => {
+              if (currentQuestion) {
+                speakWithBackendAudio(currentQuestion);
+              }
+              finalTranscript = '';
+              finalTranscriptRef.current = '';
+              voiceCommandDetectionRef.current = false;
+            }, 100);
+            return;
+          } else if (command === 'pause') {
+            console.log('⏸️ Pause command detected, pausing');
+            if (silenceTimer) clearTimeout(silenceTimer);
+            setIsPaused(true);
+            if (recognitionRef.current) {
+              recognitionRef.current.stop();
+            }
+            setTimeout(() => {
+              setIsPaused(false);
+              voiceCommandDetectionRef.current = false;
+              startListening();
+            }, 5000);
+            return;
+          }
+          
+          voiceCommandDetectionRef.current = false;
+        }
+      }
+      
+      // Check for interruption (user starts speaking while AI is talking)
+      if (isAISpeaking && pauseAudioRef.current && interimTranscript.trim().length > 5 && !voiceCommandDetectionRef.current) {
+        console.log('🗣️ User interrupted AI, pausing AI and listening');
+        pauseAudioRef.current.pause();
+        setIsAISpeaking(false);
+        setIsReadyForUser(false);
+      }
+
+      // User is speaking - clear silence timer
+      if (silenceTimer) {
+        clearTimeout(silenceTimer);
+      }
+
+      // Set new silence timer (3-5 seconds of silence = done for natural conversation)
+      // Shorter timeout makes conversation feel more responsive
+      const silenceTimeout = finalTranscript.trim() ? 4000 : 6000; // 4s if we have some content, 6s if starting fresh
+      silenceTimer = setTimeout(() => {
+        const transcriptToUse = finalTranscript.trim() || finalTranscriptRef.current;
+        if (transcriptToUse) {
+          console.log('🔇 Silence detected, auto-submitting answer');
+          recognition.stop();
+          handleCandidateResponse(transcriptToUse);
+          finalTranscript = '';
+          finalTranscriptRef.current = '';
+        }
+      }, silenceTimeout);
     };
 
     recognition.onerror = (event: any) => {
       console.error('Speech error:', event.error);
+      if (silenceTimer) clearTimeout(silenceTimer);
       setIsListening(false);
     };
 
-    recognition.onend = () => setIsListening(false);
+    recognition.onend = () => {
+      if (silenceTimer) clearTimeout(silenceTimer);
+      setIsListening(false);
+      
+      // If there's a final transcript when manually stopped, process it
+      // This handles the case when user clicks "Stop Recording" or silence timeout
+      const savedTranscript = finalTranscriptRef.current;
+      if (savedTranscript && savedTranscript.trim()) {
+        console.log('🛑 Recording stopped, processing transcript:', savedTranscript);
+        
+        // Check for voice commands FIRST before processing
+        const command = detectVoiceCommands(savedTranscript);
+        if (command && !voiceCommandDetectionRef.current) {
+          voiceCommandDetectionRef.current = true;
+          
+          if (command === 'stop') {
+            console.log('🛑 Stop command detected in onend, submitting immediately');
+            setTimeout(() => {
+              handleCandidateResponse(savedTranscript);
+              finalTranscriptRef.current = '';
+              voiceCommandDetectionRef.current = false;
+            }, 100);
+            return;
+          } else if (command === 'skip') {
+            console.log('⏭️ Skip command detected in onend, skipping question');
+            setTimeout(() => {
+              skipQuestion();
+              finalTranscriptRef.current = '';
+              voiceCommandDetectionRef.current = false;
+            }, 100);
+            return;
+          } else if (command === 'repeat') {
+            console.log('🔁 Repeat command detected in onend, replaying question');
+            setTimeout(() => {
+              if (currentQuestion) {
+                speakWithBackendAudio(currentQuestion);
+              }
+              finalTranscriptRef.current = '';
+              voiceCommandDetectionRef.current = false;
+            }, 100);
+            return;
+          }
+          
+          voiceCommandDetectionRef.current = false;
+        }
+        
+        // No command detected, process normally
+        // Use setTimeout to ensure onend completes before processing
+        setTimeout(() => {
+          handleCandidateResponse(savedTranscript);
+          finalTranscriptRef.current = ''; // Clear after processing
+        }, 100);
+      } else {
+        console.log('⚠️ Recording ended but no transcript available');
+        // Reset processing state if no transcript
+        setIsProcessing(false);
+      }
+    };
 
     return recognition;
   };
@@ -292,10 +563,24 @@ export default function AIInterviewSystemV2({
 
   // Generate AI question using backend API
   const generateAIQuestion = async () => {
+    // Prevent multiple simultaneous question generations
+    if (isGeneratingQuestionRef.current) {
+      console.log('⚠️ Question generation already in progress, skipping...');
+      return;
+    }
+    
+    if (isProcessing) {
+      console.log('⚠️ Already processing, skipping question generation...');
+      return;
+    }
+    
+    isGeneratingQuestionRef.current = true;
     setIsProcessing(true);
 
     try {
-      console.log('🤖 Calling backend API for AI-generated question...');
+      console.log(`\n${'='.repeat(60)}`);
+      console.log(`🤖 [AIRA] Generating question #${questionCount}...`);
+      console.log(`${'='.repeat(60)}\n`);
       
       // Collect previous answers for context
       const previousAnswers = messages
@@ -313,8 +598,11 @@ export default function AIInterviewSystemV2({
           position,
           skillCategory,
           experienceLevel,
-          resumeData: null, // TODO: Add resume data when available
+          resumeData: resumeData || null, // Pass parsed resume data
           previousAnswers,
+          previousQuestions: messages
+            .filter(m => m.sender === 'ai' && !m.id.startsWith('thinking-') && m.text.trim() !== 'Thinking...')
+            .map(m => m.text), // Pass previous questions to prevent repetition
           questionNumber: questionCount,
           interviewPhase
         })
@@ -332,7 +620,9 @@ export default function AIInterviewSystemV2({
 
       const { questionText, audioBase64 } = data.data;
 
-      console.log('✅ Received AI-generated question:', questionText);
+      console.log(`\n${'─'.repeat(60)}`);
+      console.log(`💬 [AIRA]: ${questionText}`);
+      console.log(`${'─'.repeat(60)}\n`);
 
       const aiMessage: Message = {
         id: Date.now().toString(),
@@ -352,7 +642,11 @@ export default function AIInterviewSystemV2({
       } else {
         await speakText(questionText);
         // Only start listening if using fallback TTS
-        setTimeout(() => startListening(), 500);
+        setIsReadyForUser(true);
+        setTimeout(() => {
+          setIsReadyForUser(false);
+          startListening();
+        }, 1500);
       }
 
       // Update question counts
@@ -390,9 +684,14 @@ export default function AIInterviewSystemV2({
       setMessages(prev => [...prev, aiMessage]);
       setCurrentQuestion(fallbackQuestion);
       await speakWithBackendAudio(fallbackQuestion);
-      setTimeout(() => startListening(), 500);
+      setIsReadyForUser(true);
+      setTimeout(() => {
+        setIsReadyForUser(false);
+        startListening();
+      }, 1500);
     } finally {
       setIsProcessing(false);
+      isGeneratingQuestionRef.current = false;
     }
   };
 
@@ -400,27 +699,36 @@ export default function AIInterviewSystemV2({
   const playAudioFromBase64 = async (base64Audio: string) => {
     try {
       setIsAISpeaking(true);
+      setIsReadyForUser(false); // Not ready while speaking
       console.log('🔊 AI started speaking...');
       
       const audioBlob = base64ToBlob(base64Audio, 'audio/mp3');
       const audioUrl = URL.createObjectURL(audioBlob);
       const audio = new Audio(audioUrl);
+      pauseAudioRef.current = audio; // Store reference for pause/interruption
       
       return new Promise<void>((resolve, reject) => {
         audio.onended = () => {
           URL.revokeObjectURL(audioUrl);
+          pauseAudioRef.current = null; // Clear reference
           setIsAISpeaking(false);
           console.log('✅ AI finished speaking');
           
-          // Automatically start listening after AI finishes speaking
+          // Natural pause before listening (1.5s feels conversational)
+          // Show "ready" indicator during this pause
+          setIsReadyForUser(true);
           setTimeout(() => {
-            console.log('🎤 Auto-starting listening after AI speech...');
-            startListening();
-          }, 500);
+            console.log('🎤 Auto-starting listening after natural pause...');
+            setIsReadyForUser(false);
+            if (!isPaused) {
+              startListening();
+            }
+          }, 1500); // 1.5 second natural pause
           
           resolve();
         };
         audio.onerror = (err) => {
+          pauseAudioRef.current = null; // Clear reference
           setIsAISpeaking(false);
           reject(err);
         };
@@ -482,11 +790,23 @@ export default function AIInterviewSystemV2({
     }
   };
 
-  // Start listening
+  // Start listening with smart timeout
   const startListening = () => {
     // Skip voice recognition in video-only mode (no audio)
     if (interviewMode === 'video-only') {
       console.log('📹 Video-only mode - skipping voice recognition');
+      return;
+    }
+    
+    // Don't start if paused
+    if (isPaused) {
+      console.log('⏸️ Listening paused, not starting');
+      return;
+    }
+    
+    // Prevent starting if AI is still speaking
+    if (isAISpeaking) {
+      console.log('⏳ Waiting for AI to finish speaking before starting to listen...');
       return;
     }
     
@@ -496,9 +816,33 @@ export default function AIInterviewSystemV2({
 
     if (recognitionRef.current && isMicEnabled) {
       try {
+        // Clear any previous transcript
+        finalTranscriptRef.current = '';
         recognitionRef.current.start();
         setIsListening(true);
-        console.log('🎤 Started listening - REC indicator should show');
+        setIsReadyForUser(false); // Not ready anymore, actively listening
+        setRecordingTime(0);
+        console.log('🎤 Started listening - user can speak now');
+
+        // Initialize audio visualization (async - don't wait)
+        initializeAudioVisualization().catch(err => {
+          console.log('⚠️ Audio visualization failed, will show placeholder bars:', err);
+        });
+
+        // Start recording timer (updates every second - fixed timing)
+        if (recordingTimerRef.current) {
+          clearInterval(recordingTimerRef.current);
+        }
+        recordingTimerRef.current = setInterval(() => {
+          setRecordingTime(prev => {
+            // Cap at 3 minutes for display
+            if (prev >= 180) return 180;
+            return prev + 1;
+          });
+        }, 1000);
+
+        // Removed 3-minute timer - let silence detection handle it naturally
+
       } catch (err) {
         console.error('Failed to start listening:', err);
       }
@@ -507,10 +851,248 @@ export default function AIInterviewSystemV2({
     }
   };
 
+  // Initialize audio visualization for live waveform
+  const initializeAudioVisualization = async () => {
+    try {
+      // Use existing mediaStream if available (already has mic access)
+      let stream = mediaStream;
+      
+      // If no existing stream, try to get one
+      if (!stream && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+        console.log('🎵 Getting new audio stream for visualization...');
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      }
+      
+      if (!stream) {
+        console.log('⚠️ No audio stream available for visualization');
+        return;
+      }
+      
+      console.log('🎵 Initializing audio visualization with stream...');
+      
+      // Create audio context
+      if (!audioContextRef.current) {
+        audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+      }
+      
+      const audioContext = audioContextRef.current;
+      
+      // Resume audio context if suspended (required by some browsers)
+      if (audioContext.state === 'suspended') {
+        await audioContext.resume();
+      }
+      
+      // Get audio track from stream
+      const audioTracks = stream.getAudioTracks();
+      if (audioTracks.length === 0) {
+        console.log('⚠️ No audio tracks in stream');
+        return;
+      }
+      
+      const source = audioContext.createMediaStreamSource(stream);
+      
+      // Create analyser node
+      if (!analyserRef.current) {
+        analyserRef.current = audioContext.createAnalyser();
+        analyserRef.current.fftSize = 256;
+        analyserRef.current.smoothingTimeConstant = 0.8;
+      }
+      
+      source.connect(analyserRef.current);
+      console.log('✅ Audio analyser connected, starting waveform animation');
+      
+      // Start animation loop
+      animateWaveform();
+    } catch (err) {
+      console.error('❌ Audio visualization error:', err);
+      // Set empty levels so UI doesn't break
+      setAudioLevels([]);
+    }
+  };
+
+  // Animate waveform bars - shows real-time user voice input
+  const animateWaveform = () => {
+    if (!analyserRef.current || !isListening) {
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+        animationFrameRef.current = null;
+      }
+      setAudioLevels([]); // Clear waveform when not listening
+      return;
+    }
+
+    const analyser = analyserRef.current;
+    const bufferLength = analyser.frequencyBinCount;
+    const dataArray = new Uint8Array(bufferLength);
+    
+    // Use frequency data for voice visualization (better for showing voice frequencies)
+    analyser.getByteFrequencyData(dataArray);
+    
+    // Extract levels for visualization (use first 20 bars for smooth display)
+    const barCount = 20;
+    const step = Math.floor(bufferLength / barCount);
+    const levels: number[] = [];
+    
+    // Calculate average volume for overall boost
+    let sum = 0;
+    for (let i = 0; i < bufferLength; i++) {
+      sum += dataArray[i];
+    }
+    const averageVolume = sum / bufferLength;
+    
+    // Generate waveform bars that respond to voice
+    for (let i = 0; i < barCount; i++) {
+      const index = i * step;
+      const value = dataArray[index];
+      // Normalize to 0-100
+      const normalized = (value / 255) * 100;
+      // Add wave pattern for visual interest
+      const wavePattern = Math.sin(i * 0.4 + Date.now() * 0.01) * 8;
+      // Boost significantly and add minimum height
+      const boosted = Math.max(30, normalized * 5 + wavePattern + (averageVolume * 0.3)); // Minimum 30%, boost by 5x
+      levels.push(Math.min(100, boosted));
+    }
+    
+    // Always set levels when listening (even if low) so bars are visible
+    setAudioLevels(levels);
+    animationFrameRef.current = requestAnimationFrame(animateWaveform);
+  };
+
+  // Stop listening manually
+  const stopListening = () => {
+    console.log('🛑 Stop recording clicked');
+    
+    // Stop audio visualization
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
+    }
+    setAudioLevels([]);
+    
+    if (recognitionRef.current) {
+      // Try to get any available transcript before stopping
+      // Access the recognition's result handler to get current transcript
+      try {
+        // Force stop - onend will handle processing
+        recognitionRef.current.stop();
+      } catch (err) {
+        console.error('Error stopping recognition:', err);
+      }
+    }
+    
+    if (recordingTimerRef.current) {
+      clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = null;
+    }
+    if (maxRecordingTimeRef.current) {
+      clearTimeout(maxRecordingTimeRef.current);
+      maxRecordingTimeRef.current = null;
+    }
+    
+    // Don't set isListening to false here - let onend handle it
+    // so the transcript can be processed first
+    setRecordingTime(0);
+  };
+
+  // Detect voice commands in transcript
+  // Improved to detect commands even when mixed with other text
+  const detectVoiceCommands = (transcript: string): 'stop' | 'skip' | 'repeat' | 'pause' | null => {
+    if (!transcript || !transcript.trim()) return null;
+    
+    const lowerText = transcript.toLowerCase().trim();
+    
+    // Stop commands - check for these phrases anywhere in the text
+    const stopPhrases = [
+      'that\'s all', 'thats all', 'that\'s it', 'thats it',
+      'i\'m done', 'im done', 'i am done',
+      'finished', 'i\'m finished', 'im finished', 'i am finished',
+      'done', 'complete', 'that\'s my answer', 'thats my answer',
+      'i\'m complete', 'im complete', 'that\'s everything', 'thats everything'
+    ];
+    if (stopPhrases.some(phrase => lowerText.includes(phrase))) {
+      return 'stop';
+    }
+    
+    // Skip commands
+    const skipPhrases = [
+      'i don\'t know', 'i dont know', 'idk',
+      'skip', 'next question', 'pass', 'not sure',
+      'i\'m not sure', 'im not sure', 'i am not sure',
+      'skip this', 'move on', 'next', 'skip question'
+    ];
+    if (skipPhrases.some(phrase => lowerText.includes(phrase))) {
+      return 'skip';
+    }
+    
+    // Repeat commands
+    const repeatPhrases = [
+      'repeat', 'say that again', 'what was the question',
+      'can you repeat', 'repeat the question', 'again',
+      'repeat question', 'say again', 'what question'
+    ];
+    if (repeatPhrases.some(phrase => lowerText.includes(phrase))) {
+      return 'repeat';
+    }
+    
+    // Pause commands
+    const pausePhrases = [
+      'hold on', 'wait', 'pause', 'give me a moment',
+      'one second', 'wait a moment', 'hold on a second'
+    ];
+    if (pausePhrases.some(phrase => lowerText.includes(phrase))) {
+      return 'pause';
+    }
+    
+    return null;
+  };
+
+  // Skip question (now called by voice command detection)
+  const skipQuestion = () => {
+    stopListening();
+    handleCandidateResponse("I don't know");
+  };
+
   // Handle candidate response with AI validation
   const handleCandidateResponse = async (text: string) => {
     setIsListening(false);
     setIsProcessing(true);
+    voiceCommandDetectionRef.current = false; // Reset command detection
+    
+    // Track answer length for thinking indicator
+    setLastAnswerLength(text.length);
+    
+    // Safety timeout: if processing takes more than 30 seconds, reset state
+    if (processingTimeoutRef.current) {
+      clearTimeout(processingTimeoutRef.current);
+    }
+    processingTimeoutRef.current = setTimeout(() => {
+      console.warn('⚠️ Processing timeout - resetting state after 30 seconds');
+      setIsProcessing(false);
+      setIsAISpeaking(false);
+      setIsReadyForUser(false);
+      setMessages(prev => prev.filter(m => !m.id.startsWith('thinking-')));
+      
+      // Show timeout message
+      const timeoutMessage: Message = {
+        id: Date.now().toString(),
+        sender: 'ai',
+        text: "I apologize for the delay. Let's continue with the next question.",
+        timestamp: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+        isVoice: false
+      };
+      setMessages(prev => [...prev, timeoutMessage]);
+      
+      // Move to next question
+      setQuestionCount(prev => {
+        const nextCount = prev + 1;
+        if (nextCount < 5) {
+          setTimeout(() => generateAIQuestion(), 2000);
+        } else {
+          completeInterview();
+        }
+        return nextCount;
+      });
+    }, 30000); // 30 second safety timeout
 
     const candidateMessage: Message = {
       id: Date.now().toString(),
@@ -520,21 +1102,70 @@ export default function AIInterviewSystemV2({
       isVoice: interviewMode !== 'video-only'
     };
 
-    console.log('💬 Candidate message added:', candidateMessage);
+    console.log(`\n${'='.repeat(60)}`);
+    console.log(`👤 [USER]: ${text}`);
+    console.log(`${'='.repeat(60)}\n`);
+    
     setMessages(prev => [...prev, candidateMessage]);
 
+    // ⚡ OPTIMIZATION: Add immediate "thinking" indicator
+    const thinkingMessage: Message = {
+      id: 'thinking-' + Date.now(),
+      sender: 'ai',
+      text: 'Thinking...',
+      timestamp: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+      isVoice: false
+    };
+    setMessages(prev => [...prev, thinkingMessage]);
+
     try {
+      // Get the current question - try multiple sources
+      let questionToUse = currentQuestion;
+      
+      // If currentQuestion is empty, try to get from last AI message
+      if (!questionToUse || questionToUse.trim() === '') {
+        const aiMessages = messages.filter(m => m.sender === 'ai');
+        if (aiMessages.length > 0) {
+          // Get the most recent AI message that's not a thinking indicator
+          const lastAIMessage = aiMessages
+            .filter(m => !m.id.startsWith('thinking-') && m.text.trim() !== '...')
+            .slice(-1)[0];
+          
+          if (lastAIMessage && lastAIMessage.text && lastAIMessage.text.trim() !== '...') {
+            questionToUse = lastAIMessage.text;
+            // Update currentQuestion state for future use
+            setCurrentQuestion(questionToUse);
+          }
+        }
+      }
+      
+      // If still no question, try to get from previousQuestions
+      if (!questionToUse || questionToUse.trim() === '') {
+        const previousQuestions = messages
+          .filter(m => m.sender === 'ai' && !m.id.startsWith('thinking-'))
+          .map(m => m.text)
+          .filter(t => t && t.trim() !== '...');
+        
+        if (previousQuestions.length > 0) {
+          questionToUse = previousQuestions[previousQuestions.length - 1];
+          setCurrentQuestion(questionToUse);
+        }
+      }
+      
+      // Final fallback - should rarely happen
+      if (!questionToUse || questionToUse.trim() === '') {
+        console.warn('⚠️ No current question found anywhere, using fallback');
+        questionToUse = 'Tell me about yourself and your background';
+      }
+      
       // Validate answer quality using backend API
-      console.log('🔍 Validating answer quality...', {
-        question: currentQuestion,
-        answer: text.substring(0, 50),
-        questionNumber: questionCount
-      });
+      console.log(`🔍 [AIRA] Evaluating answer for question #${questionCount}...`);
       
       // Get previous questions from messages
       const previousQuestions = messages
-        .filter(m => m.sender === 'ai')
-        .map(m => m.text);
+        .filter(m => m.sender === 'ai' && !m.id.startsWith('thinking-'))
+        .map(m => m.text)
+        .filter(t => t && t.trim() !== '...');
       
       const validation = await fetch('/api/ai-interview/validate-answer', {
         method: 'POST',
@@ -542,7 +1173,7 @@ export default function AIInterviewSystemV2({
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          question: currentQuestion,
+          question: questionToUse,
           answer: text,
           position: position,
           questionNumber: questionCount,
@@ -557,27 +1188,61 @@ export default function AIInterviewSystemV2({
       const validationData = await validation.json();
       const analysis = validationData.data;
 
-      console.log('📊 Answer evaluation:', {
-        quality: analysis.quality,
-        score: analysis.qualityScore,
-        followUpType: analysis.followUpType
-      });
+      console.log(`📊 [AIRA] Evaluation Result:`);
+      console.log(`   Quality: ${analysis.quality} (${analysis.qualityScore}/100)`);
+      console.log(`   Needs Follow-up: ${analysis.needsFollowUp ? 'Yes' : 'No'}`);
+      if (analysis.suggestedFollowUp) {
+        console.log(`   Follow-up: ${analysis.suggestedFollowUp.substring(0, 80)}...`);
+      }
+      console.log(`${'─'.repeat(60)}\n`);
 
       // Use the AI-generated professional response
       const aiResponseText = analysis.aiResponseText || analysis.professionalResponse || 
         analysis.suggestedFollowUp || analysis.responsePhrase || 
         "Thank you. Let's continue.";
 
-      // Add AI response to messages
-      const aiResponse: Message = {
-        id: Date.now().toString(),
-        sender: 'ai',
-        text: aiResponseText,
-        timestamp: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-        isVoice: true
-      };
+      // Log AIRA's response
+      if (!analysis.suggestedFollowUp || aiResponseText !== analysis.suggestedFollowUp) {
+        console.log(`\n${'─'.repeat(60)}`);
+        console.log(`💬 [AIRA]: ${aiResponseText}`);
+        console.log(`${'─'.repeat(60)}\n`);
+      }
 
-      setMessages(prev => [...prev, aiResponse]);
+      // Set AI speaking state FIRST to prevent "Ready to talk" from showing
+      setIsAISpeaking(true);
+      setIsReadyForUser(false); // Not ready while speaking
+      setIsProcessing(false);
+      
+      // Clear safety timeout since processing completed successfully
+      if (processingTimeoutRef.current) {
+        clearTimeout(processingTimeoutRef.current);
+        processingTimeoutRef.current = null;
+      }
+
+      // ⚡ OPTIMIZATION: Remove thinking indicator and add real response
+      setMessages(prev => {
+        // Remove the "..." thinking message
+        const filtered = prev.filter(m => !m.id.startsWith('thinking-'));
+        
+        // Add real AI response
+        const aiResponse: Message = {
+          id: Date.now().toString(),
+          sender: 'ai',
+          text: aiResponseText,
+          timestamp: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+          isVoice: true
+        };
+        
+        return [...filtered, aiResponse];
+      });
+      
+      // Update current question BEFORE playing audio (so UI updates immediately)
+      if (analysis.suggestedFollowUp) {
+        setCurrentQuestion(analysis.suggestedFollowUp);
+        console.log(`\n${'─'.repeat(60)}`);
+        console.log(`💬 [AIRA]: ${analysis.suggestedFollowUp}`);
+        console.log(`${'─'.repeat(60)}\n`);
+      }
       
       // Use pre-generated audio if available, otherwise generate on-the-fly
       if (analysis.followUpAudio) {
@@ -587,35 +1252,86 @@ export default function AIInterviewSystemV2({
         await speakWithBackendAudio(aiResponseText);
       }
       
-      // Note: playAudioFromBase64 will auto-start listening after audio ends
+      // Note: playAudioFromBase64 will auto-start listening after audio ends with natural pause
 
       // Decide next action based on evaluation
       if (analysis.needsFollowUp && analysis.followUpType !== 'next-topic') {
         // Ask follow-up, don't increment question count
-        console.log(`🔄 Follow-up needed (${analysis.followUpType})`);
+        console.log(`🔄 Follow-up needed (${analysis.followUpType}) - waiting for proper answer`);
+        // Don't generate new question - wait for candidate to provide actual answer
         // Listening will start automatically after AI speaks
       } else {
-        // Move to next question
+        // Move to next question only if answer was complete
         console.log('✅ Answer complete, moving to next question');
-        setQuestionCount(prev => prev + 1);
-        
-        if (questionCount + 1 < 5) {
-          setTimeout(() => generateAIQuestion(), 2000);
-        } else {
-          completeInterview();
-        }
+        // Use functional update to ensure we have the correct count
+        setQuestionCount(prev => {
+          const nextCount = prev + 1;
+          console.log(`🔄 Moving to question #${nextCount} after successful answer`);
+          
+          // Prevent regenerating question #0
+          if (nextCount === 0) {
+            console.warn('⚠️ Attempted to set questionCount to 0, using 1 instead');
+            setTimeout(() => generateAIQuestion(), 2000);
+            return 1;
+          }
+          
+          // Generate next question or complete
+          if (nextCount < 5) {
+            setTimeout(() => generateAIQuestion(), 2000);
+          } else {
+            completeInterview();
+          }
+          
+          return nextCount;
+        });
       }
 
     } catch (err) {
       console.error('❌ Error validating answer:', err);
-      // Fallback: just move to next question
-      setQuestionCount(prev => prev + 1);
+      // Reset processing state on error
+      setIsProcessing(false);
+      setIsAISpeaking(false);
+      setIsReadyForUser(false);
       
-      if (questionCount + 1 < 5) {
-        setTimeout(() => generateAIQuestion(), 2000);
-      } else {
-        completeInterview();
+      // Clear safety timeout
+      if (processingTimeoutRef.current) {
+        clearTimeout(processingTimeoutRef.current);
+        processingTimeoutRef.current = null;
       }
+      
+      // Remove thinking indicator
+      setMessages(prev => prev.filter(m => !m.id.startsWith('thinking-')));
+      
+      // Show error message to user
+      const errorMessage: Message = {
+        id: Date.now().toString(),
+        sender: 'ai',
+        text: "I apologize, but I encountered an error processing your response. Let's continue with the next question.",
+        timestamp: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+        isVoice: false
+      };
+      setMessages(prev => [...prev, errorMessage]);
+      
+      // Fallback: just move to next question
+      // Use functional update to ensure we have the correct count
+      setQuestionCount(prev => {
+        const nextCount = prev + 1;
+        console.log(`🔄 Moving to question #${nextCount} after error`);
+        
+        // Prevent going back to question 0
+        if (nextCount === 0) {
+          console.warn('⚠️ Attempted to set questionCount to 0, using 1 instead');
+          setTimeout(() => generateAIQuestion(), 2000);
+          return 1;
+        }
+        
+        if (nextCount < 5) {
+          setTimeout(() => generateAIQuestion(), 2000);
+        } else {
+          completeInterview();
+        }
+        return nextCount;
+      });
     } finally {
       setIsProcessing(false);
     }
@@ -746,7 +1462,7 @@ export default function AIInterviewSystemV2({
         candidateName={candidateName}
         position={position}
         interviewMode={interviewMode}
-        onTestComplete={(stream: MediaStream) => {
+        onTestComplete={async (stream: MediaStream) => {
           console.log('✅ Test complete, received stream:', stream, 'Mode:', interviewMode);
           setTestMediaStream(stream);
           setShowTestPage(false);
@@ -758,29 +1474,164 @@ export default function AIInterviewSystemV2({
             setIsMicEnabled(false);
           }
           
-          // Initialize interview with time validation
-          setTimeout(async () => {
-            // Validate time window before starting
-            const validation = validateTimeWindow();
-            
-            if (!validation.allowed) {
-              console.error('⏰ Time window validation failed:', validation.message);
-              setTimeValidationError(validation.message || 'Interview cannot start at this time');
-              if (onError) {
-                onError(validation.message || 'Interview cannot start at this time');
-              }
-              return;
+          // Show countdown screen
+          setShowCountdown(true);
+          setCountdown(5);
+          
+          // Validate time window
+          const validation = validateTimeWindow();
+          if (!validation.allowed) {
+            console.error('⏰ Time window validation failed:', validation.message);
+            setTimeValidationError(validation.message || 'Interview cannot start at this time');
+            if (onError) {
+              onError(validation.message || 'Interview cannot start at this time');
             }
+            return;
+          }
 
-            console.log('✅ Time window validation passed');
-            setTimeValidationError(null);
+          console.log('✅ Time window validation passed');
+          setTimeValidationError(null);
+          
+          // Start preloading in background
+          setIsPreloading(true);
+          console.log('🔄 Preloading interview question in background...');
+          
+          // Preload first question in background
+          const preloadPromise = (async () => {
+            try {
+              const response = await fetch('/api/ai-interview/question', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  candidateName: candidateName,
+                  position: position,
+                  skillCategory: skillCategory,
+                  experienceLevel: experienceLevel,
+                  questionNumber: 0,
+                  interviewPhase: 'behavioral'
+                })
+              });
+              
+              const data = await response.json();
+              console.log('✅ Question preloaded successfully');
+              return data;
+            } catch (error) {
+              console.error('❌ Preload failed:', error);
+              return null;
+            }
+          })();
+          
+          // Countdown timer
+          let count = 5;
+          const countdownInterval = setInterval(() => {
+            count--;
+            setCountdown(count);
+            
+            if (count === 0) {
+              clearInterval(countdownInterval);
+            }
+          }, 1000);
+          
+          // Wait for BOTH countdown AND preloaded question
+          const [, preloadedData] = await Promise.all([
+            new Promise(resolve => setTimeout(resolve, 5000)), // Countdown
+            preloadPromise // Question loading
+          ]);
+          
+          setIsPreloading(false);
+          
+          // Initialize media first
+          await initializeMedia(stream);
+          
+          if (preloadedData && preloadedData.success) {
+            // Use preloaded question
+            const { questionText, audioBase64 } = preloadedData.data;
+            
+            const aiMessage: Message = {
+              id: Date.now().toString(),
+              sender: 'ai',
+              text: questionText,
+              timestamp: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+              isVoice: true
+            };
+            
+            setMessages([aiMessage]);
+            setCurrentQuestion(questionText);
+            console.log('✅ Initial question set in state:', questionText.substring(0, 60));
+            setStartTime(Date.now());
+            
+            // NOW hide countdown and start interview
+            setShowCountdown(false);
+            setIsStarted(true);
+            
+            // Play preloaded audio immediately
+            if (audioBase64) {
+              await playAudioFromBase64(audioBase64);
+            }
+          } else {
+            // Fallback: hide countdown and start normally
+            setShowCountdown(false);
             setIsStarted(true);
             setStartTime(Date.now());
-            await initializeMedia(stream);
-            setTimeout(() => generateAIQuestion(), 1500);
-          }, 100);
+            setTimeout(() => generateAIQuestion(), 500);
+          }
         }}
       />
+    );
+  }
+
+  // Show loading screen
+  if (showCountdown) {
+    return (
+      <div className="fixed inset-0 flex items-center justify-center bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 z-50">
+        <div className="text-center space-y-10 animate-in fade-in duration-500">
+          {/* Animated Logo/Icon */}
+          <div className="flex justify-center">
+            <div className="relative">
+              <div className="w-32 h-32 bg-white/10 backdrop-blur-lg rounded-full flex items-center justify-center border-4 border-white/20 shadow-2xl animate-pulse">
+                <svg className="w-16 h-16 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                </svg>
+              </div>
+              {/* Spinning ring */}
+              <div className="absolute inset-0 border-4 border-transparent border-t-white/40 rounded-full animate-spin"></div>
+            </div>
+          </div>
+
+          {/* Loading Message */}
+          <div className="space-y-4">
+            <h2 className="text-4xl font-bold text-white">
+              Preparing Your Interview
+            </h2>
+            <p className="text-xl text-white/80">
+              Please wait while we set everything up...
+            </p>
+            
+            {/* Loading Bar */}
+            <div className="max-w-md mx-auto mt-6">
+              <div className="h-2 bg-white/20 rounded-full overflow-hidden">
+                <div className="h-full bg-gradient-to-r from-blue-400 to-purple-400 rounded-full animate-pulse" 
+                     style={{ width: '100%', animation: 'pulse 1.5s ease-in-out infinite' }}>
+                </div>
+              </div>
+            </div>
+
+            {/* Loading Dots */}
+            <div className="flex items-center justify-center gap-2 mt-4">
+              <div className="w-3 h-3 bg-white/80 rounded-full animate-bounce"></div>
+              <div className="w-3 h-3 bg-white/80 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+              <div className="w-3 h-3 bg-white/80 rounded-full animate-bounce" style={{ animationDelay: '0.4s' }}></div>
+            </div>
+          </div>
+
+          {/* Tips */}
+          <div className="mt-12 bg-white/10 backdrop-blur-lg rounded-2xl p-6 max-w-md mx-auto border border-white/20">
+            <p className="text-white/90 text-sm leading-relaxed">
+              💡 <strong>Tip:</strong> Speak clearly and take your time. The AI will wait for you to finish before asking the next question.
+            </p>
+          </div>
+        </div>
+      </div>
     );
   }
 
@@ -1167,11 +2018,47 @@ export default function AIInterviewSystemV2({
               <div className="absolute inset-0 w-2 h-2 bg-emerald-400/40 rounded-full animate-ping"></div>
             </div>
             <span className="text-emerald-300 text-xs font-medium tracking-wide">Listening...</span>
+            {/* Live Audio Waveform - Always show when listening */}
+            <div className="flex items-center justify-center gap-0.5 ml-2 h-4">
+              {audioLevels.length > 0 ? (
+                audioLevels.map((level, i) => (
+                  <div
+                    key={i}
+                    className="bg-emerald-300 rounded-sm transition-all duration-75"
+                    style={{
+                      width: '2px',
+                      height: `${Math.max(4, level * 0.15)}px`,
+                      minHeight: '3px',
+                      maxHeight: '12px'
+                    }}
+                  />
+                ))
+              ) : (
+                // Show animated placeholder bars when listening
+                Array.from({ length: 20 }).map((_, i) => (
+                  <div
+                    key={i}
+                    className="bg-emerald-300/50 rounded-sm animate-pulse"
+                    style={{
+                      width: '2px',
+                      height: `${3 + (i % 3)}px`,
+                      animationDelay: `${i * 0.1}s`
+                    }}
+                  />
+                ))
+              )}
+            </div>
           </>
         )}
         
         {/* Idle State */}
-        {!isAISpeaking && !isListening && (
+        {isReadyForUser && !isAISpeaking && !isListening && (
+          <div className="flex items-center gap-1.5 animate-pulse">
+            <div className="w-1.5 h-1.5 bg-emerald-400 rounded-full shadow-sm animate-pulse"></div>
+            <span className="text-emerald-300 text-xs font-medium tracking-wide">Ready for your response</span>
+          </div>
+        )}
+        {!isReadyForUser && !isAISpeaking && !isListening && (
           <div className="flex items-center gap-1.5">
             <div className="w-1.5 h-1.5 bg-slate-500 rounded-full shadow-sm"></div>
             <span className="text-slate-400 text-xs font-light tracking-wide">Ready to assist</span>
@@ -1234,18 +2121,14 @@ export default function AIInterviewSystemV2({
     </div>
   )}
   
-  {/* AI Thinking Indicator */}
+  {/* AI Thinking Indicator - NEW ENHANCED VERSION */}
   {isProcessing && (
-    <div className="flex justify-start animate-in fade-in slide-in-from-bottom-2 duration-300">
-      <div className="bg-white border border-slate-200 rounded-2xl rounded-tl-sm px-4 py-3 flex items-center gap-2.5 shadow-sm">
-        <div className="flex space-x-1.5">
-          <div className="w-2 h-2 bg-emerald-400 rounded-full animate-bounce"></div>
-          <div className="w-2 h-2 bg-teal-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
-          <div className="w-2 h-2 bg-emerald-500 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
-        </div>
-        <span className="text-sm text-slate-700 font-medium">Thinking...</span>
-      </div>
-    </div>
+    <ThinkingIndicator
+      answerLength={lastAnswerLength}
+      questionType={interviewPhase === 'technical' ? 'technical' : 'behavioral'}
+      isFirstQuestion={questionCount === 0}
+      expectedDuration={3000}
+    />
   )}
   
   <div ref={messagesEndRef} />
@@ -1284,14 +2167,69 @@ export default function AIInterviewSystemV2({
 
             {/* Voice Status Indicator - For Voice Modes */}
             {interviewMode !== 'video-only' && (
-              <div className="border-t border-gray-200 p-3 bg-white">
-                <div className="flex flex-col items-center justify-center space-y-1.5">
+              <div className="border-t border-gray-200 p-3 bg-white space-y-3">
+                {/* Mic Level Indicator - NEW */}
+                {isListening && (
+                  <MicLevelIndicator
+                    stream={mediaStream}
+                    isActive={isListening}
+                  />
+                )}
+                
+                {/* Real-Time Transcription - NEW */}
+                {isListening && (
+                  <RealTimeTranscription
+                    isListening={isListening}
+                    transcript={finalTranscriptRef.current}
+                    interimTranscript={interimTranscript}
+                    confidence={transcriptConfidence}
+                  />
+                )}
+                
+                <div className="flex flex-col items-center justify-center space-y-2">
                   {isListening && (
-                    <div className="flex items-center space-x-2 bg-gradient-to-r from-red-500 to-red-600 px-3 py-2 rounded-full shadow-md animate-pulse">
-                      <div className="w-1.5 h-1.5 bg-white rounded-full animate-ping"></div>
-                      <Mic className="w-3.5 h-3.5 text-white" />
-                      <span className="text-white font-semibold text-xs">Listening...</span>
-                    </div>
+                    <>
+                      <div className="flex items-center space-x-2 bg-gradient-to-r from-red-500 to-red-600 px-3 py-2 rounded-full shadow-md animate-pulse">
+                        <div className="w-1.5 h-1.5 bg-white rounded-full animate-ping"></div>
+                        <Mic className="w-3.5 h-3.5 text-white" />
+                        <span className="text-white font-semibold text-xs">
+                          Listening... {Math.floor(recordingTime / 60)}:{(recordingTime % 60).toString().padStart(2, '0')} / 3:00
+                        </span>
+                        {/* Live Audio Waveform - Always show when listening */}
+                        <div className="flex items-center justify-center gap-0.5 ml-2 h-4">
+                          {audioLevels.length > 0 ? (
+                            audioLevels.map((level, i) => (
+                              <div
+                                key={i}
+                                className="bg-white rounded-sm transition-all duration-75"
+                                style={{
+                                  width: '2px',
+                                  height: `${Math.max(6, level * 0.2)}px`,
+                                  minHeight: '4px',
+                                  maxHeight: '16px'
+                                }}
+                              />
+                            ))
+                          ) : (
+                            // Show animated placeholder bars when listening
+                            Array.from({ length: 20 }).map((_, i) => (
+                              <div
+                                key={i}
+                                className="bg-white/50 rounded-sm animate-pulse"
+                                style={{
+                                  width: '2px',
+                                  height: `${4 + (i % 3)}px`,
+                                  animationDelay: `${i * 0.1}s`
+                                }}
+                              />
+                            ))
+                          )}
+                        </div>
+                      </div>
+                      {/* Note: Buttons removed for fully conversational experience */}
+                      {/* User can speak naturally - silence detection handles stopping */}
+                      {/* Voice commands like "I don't know" or "skip" are handled automatically */}
+                    </>
                   )}
                   {isAISpeaking && (
                     <div className="flex items-center space-x-2 bg-gradient-to-r from-purple-600 to-purple-500 px-3 py-2 rounded-full shadow-md">
@@ -1299,14 +2237,29 @@ export default function AIInterviewSystemV2({
                       <span className="text-white font-semibold text-xs">Speaking...</span>
                     </div>
                   )}
-                  {!isListening && !isAISpeaking && !isProcessing && (
-                    <div className="flex items-center space-x-2 bg-gradient-to-r from-green-500 to-emerald-500 px-3 py-2 rounded-full shadow-md">
-                      <div className="w-1.5 h-1.5 bg-white rounded-full"></div>
+                  {isReadyForUser && !isListening && !isAISpeaking && !isProcessing && (
+                    <div className="flex items-center space-x-2 bg-gradient-to-r from-green-500 to-emerald-500 px-3 py-2 rounded-full shadow-md animate-pulse">
+                      <div className="w-1.5 h-1.5 bg-white rounded-full animate-pulse"></div>
                       <span className="text-white font-semibold text-xs">Ready to talk</span>
                     </div>
                   )}
+                  {!isReadyForUser && !isListening && !isAISpeaking && !isProcessing && (
+                    <div className="flex items-center space-x-2 bg-gradient-to-r from-slate-600 to-slate-700 px-3 py-2 rounded-full shadow-md">
+                      <div className="w-1.5 h-1.5 bg-slate-300 rounded-full"></div>
+                      <span className="text-white font-semibold text-xs">Processing...</span>
+                    </div>
+                  )}
+                  {isPaused && (
+                    <div className="flex items-center space-x-2 bg-gradient-to-r from-yellow-500 to-orange-500 px-3 py-2 rounded-full shadow-md mt-2">
+                      <div className="w-1.5 h-1.5 bg-white rounded-full animate-pulse"></div>
+                      <span className="text-white font-semibold text-xs">Paused - Resume in a moment</span>
+                    </div>
+                  )}
                   <p className="text-center text-[10px] text-gray-400 mt-1">
-                    💬 Voice conversation
+                    💬 Voice conversation - Speak naturally
+                  </p>
+                  <p className="text-center text-[9px] text-gray-500 mt-0.5">
+                    Say "skip" or "I don't know" to skip • "repeat" to replay question
                   </p>
                 </div>
               </div>
@@ -1417,6 +2370,36 @@ export default function AIInterviewSystemV2({
                         <>
                           <div className="w-3 h-3 bg-emerald-400 rounded-full animate-pulse"></div>
                           <span className="text-white text-lg font-medium">Listening...</span>
+                          {/* Live Audio Waveform - Always show when listening */}
+                          <div className="flex items-center justify-center gap-1 ml-3 h-6">
+                            {audioLevels.length > 0 ? (
+                              audioLevels.map((level, i) => (
+                                <div
+                                  key={i}
+                                  className="bg-white rounded-sm transition-all duration-75"
+                                  style={{
+                                    width: '3px',
+                                    height: `${Math.max(8, level * 0.3)}px`,
+                                    minHeight: '5px',
+                                    maxHeight: '20px'
+                                  }}
+                                />
+                              ))
+                            ) : (
+                              // Show animated placeholder bars when listening
+                              Array.from({ length: 20 }).map((_, i) => (
+                                <div
+                                  key={i}
+                                  className="bg-white/50 rounded-sm animate-pulse"
+                                  style={{
+                                    width: '3px',
+                                    height: `${5 + (i % 4)}px`,
+                                    animationDelay: `${i * 0.1}s`
+                                  }}
+                                />
+                              ))
+                            )}
+                          </div>
                         </>
                       )}
                       {!isAISpeaking && !isListening && (
@@ -1431,18 +2414,18 @@ export default function AIInterviewSystemV2({
 
           {/* Right: Chat + Questions (50%) */}
           <div className="w-1/2 flex flex-col bg-white">
-            {/* Current Question */}
-            <div className="shrink-0 p-6 bg-gradient-to-br from-blue-50 to-purple-50 border-b border-gray-200">
-              <h3 className="text-sm font-semibold text-gray-600 mb-3 uppercase tracking-wide">Current Question</h3>
-              <div className="bg-white/80 p-5 rounded-xl border-l-4 border-purple-500 shadow-sm">
-                <p className="text-gray-800 text-base leading-relaxed">
+            {/* Current Question - Compact */}
+            <div className="shrink-0 p-4 bg-gradient-to-br from-blue-50 to-purple-50 border-b border-gray-200">
+              <h3 className="text-xs font-semibold text-gray-600 mb-2 uppercase tracking-wide">Current Question</h3>
+              <div className="bg-white/80 p-3 rounded-lg border-l-4 border-purple-500 shadow-sm">
+                <p className="text-gray-800 text-sm leading-relaxed">
                   {currentQuestion || 'Please introduce yourself and tell me about your background, experience, and what makes you a good fit for this position.'}
                 </p>
               </div>
             </div>
 
-            {/* Chat Messages */}
-            <div className="flex-1 overflow-y-auto p-6 space-y-3 bg-gradient-to-br from-gray-50 via-white to-slate-50/50">
+            {/* Chat Messages - Larger Area */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-gradient-to-br from-gray-50 via-white to-slate-50/50">
               {messages.map((msg, index) => (
                 <div
                   key={msg.id}
@@ -1556,13 +2539,20 @@ export default function AIInterviewSystemV2({
                 </div>
               ) : (
                 /* Voice Status Indicator */
-                <div className="flex flex-col items-center justify-center space-y-2">
+                <div className="flex flex-col items-center justify-center space-y-3">
                   {isListening && (
-                    <div className="flex items-center space-x-3 bg-gradient-to-r from-red-500 to-red-600 px-5 py-3 rounded-full shadow-lg animate-pulse">
-                      <div className="w-2 h-2 bg-white rounded-full animate-ping"></div>
-                      <Mic className="w-5 h-5 text-white" />
-                      <span className="text-white font-semibold text-sm">Listening...</span>
-                    </div>
+                    <>
+                      <div className="flex items-center space-x-3 bg-gradient-to-r from-red-500 to-red-600 px-5 py-3 rounded-full shadow-lg animate-pulse">
+                        <div className="w-2 h-2 bg-white rounded-full animate-ping"></div>
+                        <Mic className="w-5 h-5 text-white" />
+                        <span className="text-white font-semibold text-sm">
+                          Listening... {Math.floor(recordingTime / 60)}:{(recordingTime % 60).toString().padStart(2, '0')} / 3:00
+                        </span>
+                      </div>
+                      {/* Note: Buttons removed for fully conversational experience */}
+                      {/* Speak naturally - silence detection (4-6s) or say "that's all" to finish */}
+                      {/* Say "I don't know" or "skip" to move to next question automatically */}
+                    </>
                   )}
                   {isAISpeaking && (
                     <div className="flex items-center space-x-3 bg-gradient-to-r from-purple-600 to-purple-500 px-5 py-3 rounded-full shadow-lg">
@@ -1570,14 +2560,29 @@ export default function AIInterviewSystemV2({
                       <span className="text-white font-semibold text-sm">Speaking...</span>
                     </div>
                   )}
-                  {!isListening && !isAISpeaking && !isProcessing && (
-                    <div className="flex items-center space-x-3 bg-gradient-to-r from-green-500 to-emerald-500 px-5 py-3 rounded-full shadow-lg">
-                      <div className="w-2 h-2 bg-white rounded-full"></div>
+                  {isReadyForUser && !isListening && !isAISpeaking && !isProcessing && (
+                    <div className="flex items-center space-x-3 bg-gradient-to-r from-green-500 to-emerald-500 px-5 py-3 rounded-full shadow-lg animate-pulse">
+                      <div className="w-2 h-2 bg-white rounded-full animate-pulse"></div>
                       <span className="text-white font-semibold text-sm">Ready to talk</span>
+                    </div>
+                  )}
+                  {!isReadyForUser && !isListening && !isAISpeaking && !isProcessing && (
+                    <div className="flex items-center space-x-3 bg-gradient-to-r from-slate-600 to-slate-700 px-5 py-3 rounded-full shadow-lg">
+                      <div className="w-2 h-2 bg-slate-300 rounded-full"></div>
+                      <span className="text-white font-semibold text-sm">Processing...</span>
+                    </div>
+                  )}
+                  {isPaused && (
+                    <div className="flex items-center space-x-3 bg-gradient-to-r from-yellow-500 to-orange-500 px-5 py-3 rounded-full shadow-lg mt-2">
+                      <div className="w-2 h-2 bg-white rounded-full animate-pulse"></div>
+                      <span className="text-white font-semibold text-sm">Paused - Resume in a moment</span>
                     </div>
                   )}
                   <p className="text-center text-xs text-gray-500 mt-2">
                     💬 Voice conversation - Speak naturally
+                  </p>
+                  <p className="text-center text-[10px] text-gray-400 mt-1">
+                    Say "skip" or "I don't know" to skip • "repeat" to replay question
                   </p>
                 </div>
               )}
@@ -1590,6 +2595,21 @@ export default function AIInterviewSystemV2({
       <div className="bg-gray-800 border-t border-gray-700 px-6 py-2 text-center">
         <p className="text-gray-400 text-xs">Powered by <span className="text-purple-400 font-semibold">Hire Mind</span></p>
       </div>
+      
+      {/* Confirmation Dialog for ending interview */}
+      <InterviewConfirmDialog
+        isOpen={showEndConfirm}
+        title="End Interview?"
+        message="Are you sure you want to end this interview? Your responses will be saved and submitted for evaluation."
+        confirmText="End Interview"
+        cancelText="Continue Interview"
+        variant="warning"
+        onConfirm={() => {
+          setShowEndConfirm(false);
+          completeInterview();
+        }}
+        onCancel={() => setShowEndConfirm(false)}
+      />
     </div>
   );
 }            

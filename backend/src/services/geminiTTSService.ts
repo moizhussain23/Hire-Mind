@@ -67,8 +67,6 @@ export async function generateSpeech(options: TTSOptions): Promise<Buffer> {
       throw new Error('GEMINI_API_KEY not configured');
     }
 
-    console.log(`🎤 Generating speech (${text.length} chars)...`);
-
     // Use cached client instance
     const client = getClient();
 
@@ -103,13 +101,10 @@ export async function generateSpeech(options: TTSOptions): Promise<Buffer> {
     const wavHeader = createWavHeader(pcmData.length);
     const wavBuffer = Buffer.concat([wavHeader, pcmData]);
 
-    const duration = Date.now() - startTime;
-    console.log(`✅ TTS generated in ${duration}ms (${wavBuffer.length} bytes)`);
     return wavBuffer;
 
   } catch (error: any) {
-    const duration = Date.now() - startTime;
-    console.error(`❌ Gemini TTS error after ${duration}ms:`, error.message);
+    // Silently fail - will fall back to next provider
     throw new Error(`Gemini TTS failed: ${error.message}`);
   }
 }
@@ -170,17 +165,13 @@ export async function batchGenerateSpeech(
   preset: keyof typeof VoicePresets = 'AIRA_PROFESSIONAL'
 ): Promise<Buffer[]> {
   try {
-    console.log(`🎤 Batch generating speech for ${texts.length} texts`);
-    
     const audioBuffers = await Promise.all(
       texts.map(text => generateSpeechWithPreset(text, preset))
     );
-    
-    console.log(`✅ Batch generation complete: ${audioBuffers.length} audio files`);
     return audioBuffers;
 
   } catch (error: any) {
-    console.error('❌ Batch generation error:', error);
+    console.error('[TTS] Batch generation error:', error.message);
     throw error;
   }
 }

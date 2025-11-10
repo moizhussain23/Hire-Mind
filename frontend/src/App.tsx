@@ -35,26 +35,30 @@ if (!clerkPublishableKey) {
 function App() {
   return (
     <ClerkProvider publishableKey={clerkPublishableKey}>
-      <ClerkLoaded>
-        <AuthProvider>
-          <Router>
-            <Routes>
-              {/* Public Routes */}
-              <Route path="/" element={<Layout><Landing /></Layout>} />
-              <Route path="/login" element={<Login />} />
-              <Route path="/signup" element={<SignUpPage />} />
-              <Route path="/sign-up" element={<SignUpPage />} />
-              <Route path="/onboarding" element={<Onboarding />} />
-              <Route path="/post-auth" element={<PostAuth />} />
-              <Route path="/select-role" element={<Layout><RoleSelection /></Layout>} />
-              <Route path="/contact" element={<Layout><Contact /></Layout>} />
-              <Route path="/privacy" element={<Layout><Privacy /></Layout>} />
-              <Route path="/terms" element={<Layout><Terms /></Layout>} />
-              
-              {/* Test Routes - Public routes for testing */}
-              <Route path="/test-verification" element={<TestVerification />} />
-              <Route path="/test-verification-deepface" element={<TestVerificationDeepFace />} />
-              <Route path="/test-interview" element={<InterviewTest />} />
+      <Router>
+        <Routes>
+          {/* Test Routes - Public routes for testing (NO AUTH REQUIRED) */}
+          <Route path="/test-verification" element={<TestVerification />} />
+          <Route path="/test-verification-deepface" element={<TestVerificationDeepFace />} />
+          <Route path="/test-interview" element={<InterviewTest />} />
+          <Route path="/interview-test" element={<InterviewTest />} />
+          
+          {/* All other routes wrapped in ClerkLoaded */}
+          <Route path="/*" element={
+            <ClerkLoaded>
+              <AuthProvider>
+                <Routes>
+                  {/* Public Routes */}
+                  <Route path="/" element={<Layout><Landing /></Layout>} />
+                  <Route path="/login" element={<Login />} />
+                  <Route path="/signup" element={<SignUpPage />} />
+                  <Route path="/sign-up" element={<SignUpPage />} />
+                  <Route path="/onboarding" element={<Onboarding />} />
+                  <Route path="/post-auth" element={<PostAuth />} />
+                  <Route path="/select-role" element={<Layout><RoleSelection /></Layout>} />
+                  <Route path="/contact" element={<Layout><Contact /></Layout>} />
+                  <Route path="/privacy" element={<Layout><Privacy /></Layout>} />
+                  <Route path="/terms" element={<Layout><Terms /></Layout>} />
               
               {/* Phase 1: Invitation Acceptance - Public route (requires Clerk auth) */}
               <Route path="/invitation/accept/:token" element={<AcceptInvitation />} />
@@ -71,12 +75,14 @@ function App() {
               <Route path="/hr" element={<ProtectedHRRoute><Layout><HRDashboard /></Layout></ProtectedHRRoute>} />
               <Route path="/hr-dashboard" element={<ProtectedHRRoute><Layout><HRDashboard /></Layout></ProtectedHRRoute>} />
               
-              {/* Catch all route */}
-              <Route path="*" element={<Navigate to="/" replace />} />
-            </Routes>
-          </Router>
-        </AuthProvider>
-      </ClerkLoaded>
+                  {/* Catch all route */}
+                  <Route path="*" element={<Navigate to="/" replace />} />
+                </Routes>
+              </AuthProvider>
+            </ClerkLoaded>
+          } />
+        </Routes>
+      </Router>
     </ClerkProvider>
   );
 }

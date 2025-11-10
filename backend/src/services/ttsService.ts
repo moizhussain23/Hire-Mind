@@ -1,9 +1,8 @@
 import { promises as fs } from 'fs';
 import path from 'path';
+import * as kokoroTTSService from './kokoroTTSService';
 import * as geminiTTSService from './geminiTTSService';
 import * as elevenlabsService from './elevenlabsService';
-
-console.log('🎵 TTS Service initialized (Gemini Native TTS primary, ElevenLabs fallback)');
 
 interface TTSOptions {
   text: string;
@@ -16,17 +15,88 @@ interface TTSOptions {
 
 /**
  * Generate speech audio from text
- * Uses Gemini TTS (Google) as primary (FREE, 1M chars/month, uses same API key as Gemini)
- * Falls back to ElevenLabs if Gemini fails (FREE, 10K chars/month, no credit card)
+ * Priority:
+ * 1. Kokoro TTS (Local, FREE, unlimited, high quality)
+ * 2. Gemini TTS (Cloud, FREE, 1M chars/month)
+ * 3. ElevenLabs (Cloud, FREE, 10K chars/month)
  * Returns audio buffer that can be sent to frontend
  */
 // Simple in-memory cache for TTS (max 50 entries)
 const ttsCache = new Map<string, Buffer>();
 const MAX_CACHE_SIZE = 50;
 
+// ⚡ Pre-generate common phrases for instant playback
+const COMMON_PHRASES = [
+  "I see.",
+  "That's interesting.",
+  "Tell me more about that.",
+  "Great answer!",
+  "Excellent!",
+  "I understand.",
+  "Could you elaborate?",
+  "Thank you for sharing that.",
+  "Let's move forward.",
+  "That makes sense."
+];
+
 function getCacheKey(text: string): string {
   return text.toLowerCase().trim().substring(0, 200); // Use first 200 chars as key
 }
+
+// Pre-warm cache with common phrases (wait for Kokoro to be ready)
+async function prewarmCache() {
+  // Wait for Kokoro server to be ready (up to 90 seconds - can take 40-70s to initialize)
+  let kokoroReady = false;
+  for (let i = 0; i < 90; i++) {
+    try {
+      kokoroReady = await kokoroTTSService.checkKokoroAvailable();
+      if (kokoroReady) {
+        console.log('[TTS] Kokoro ready, starting cache pre-warming');
+        break;
+      }
+    } catch (err) {
+      // Ignore
+    }
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  }
+
+  // Only pre-warm if Kokoro is ready (or wait for it)
+  if (!kokoroReady) {
+    console.log('[TTS] Kokoro not available, skipping cache pre-warming');
+    return;
+  }
+
+  try {
+    const total = COMMON_PHRASES.length;
+    console.log(`[TTS] Pre-warming cache: ${total} phrases`);
+    
+    for (let i = 0; i < total; i++) {
+      const phrase = COMMON_PHRASES[i];
+      const progress = Math.round(((i + 1) / total) * 100);
+      
+      try {
+        await generateSpeech({ text: phrase });
+        console.log(`[TTS] Cache pre-warming: ${progress}% (${i + 1}/${total})`);
+      } catch (err) {
+        console.log(`[TTS] Cache pre-warming: ${progress}% (${i + 1}/${total}) - failed`);
+      }
+    }
+    
+    console.log('[TTS] Cache pre-warming complete');
+    console.log('');
+    console.log('[System] Ready to use');
+    console.log('');
+  } catch (err) {
+    console.log('[TTS] Cache pre-warming failed');
+    console.log('');
+    console.log('[System] Ready to use (cache pre-warming skipped)');
+    console.log('');
+  }
+}
+
+// Start pre-warming in background after a delay (wait for Kokoro to initialize)
+// Kokoro server takes ~40 seconds to start, so wait 45 seconds before checking
+setTimeout(() => prewarmCache(), 45000);
 
 export async function generateSpeech(options: TTSOptions): Promise<Buffer> {
   const startTime = Date.now();
@@ -37,44 +107,69 @@ export async function generateSpeech(options: TTSOptions): Promise<Buffer> {
 
     // Check cache first
     if (ttsCache.has(cacheKey)) {
-      console.log(`💾 TTS cache hit (${Date.now() - startTime}ms)`);
       return ttsCache.get(cacheKey)!;
     }
 
-    console.log(`🎤 Generating speech (${text.length} chars)...`);
-
     let audioBuffer: Buffer | null = null;
+    let ttsProvider = 'unknown';
 
-    // Try Gemini Native TTS first (FREE, professional voice)
-    if (process.env.GEMINI_API_KEY) {
+    // Try Kokoro TTS first (Local, FREE, unlimited, high quality)
+    // Wait a bit if Kokoro server is still initializing
+    try {
+      const kokoroAvailable = await kokoroTTSService.checkKokoroAvailable();
+      if (kokoroAvailable) {
+        audioBuffer = await kokoroTTSService.generateKokoroSpeech({
+          text,
+          voice: 'af_aoede',
+          speed: 1.0
+        });
+        ttsProvider = 'Kokoro';
+      } else {
+        // Kokoro server might still be starting - wait a bit and check again
+        // This prevents falling back to other providers too quickly
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        const kokoroAvailableRetry = await kokoroTTSService.checkKokoroAvailable();
+        if (kokoroAvailableRetry) {
+          audioBuffer = await kokoroTTSService.generateKokoroSpeech({
+            text,
+            voice: 'af_aoede',
+            speed: 1.0
+          });
+          ttsProvider = 'Kokoro';
+        }
+      }
+    } catch (error: any) {
+      // Silently try next provider only if Kokoro truly fails
+    }
+
+    // Fall back to Gemini if Kokoro failed
+    if (!audioBuffer && process.env.GEMINI_API_KEY) {
       try {
-        console.log('🎵 Using Gemini TTS...');
         audioBuffer = await geminiTTSService.generateSpeech({
           text,
           voiceName: 'professional'
         });
-        console.log(`✅ Gemini TTS: ${audioBuffer.length} bytes in ${Date.now() - startTime}ms`);
+        ttsProvider = 'Gemini';
       } catch (error: any) {
-        console.error(`❌ Gemini TTS failed (${Date.now() - startTime}ms), trying ElevenLabs...`);
+        // Silently try next provider
       }
     }
 
-    // Fall back to ElevenLabs if Gemini failed or not configured
+    // Fall back to ElevenLabs if both Kokoro and Gemini failed
     if (!audioBuffer && process.env.ELEVENLABS_API_KEY) {
       try {
-        console.log('🎵 Using ElevenLabs TTS...');
         audioBuffer = await elevenlabsService.generateSpeechWithPreset(
           text,
           'AIRA_PROFESSIONAL'
         );
-        console.log(`✅ ElevenLabs: ${audioBuffer.length} bytes in ${Date.now() - startTime}ms`);
+        ttsProvider = 'ElevenLabs';
       } catch (error: any) {
-        console.error('❌ ElevenLabs error:', error.message);
+        // Log only final failure
       }
     }
 
     if (!audioBuffer) {
-      throw new Error('No TTS service configured. Please set GEMINI_API_KEY or ELEVENLABS_API_KEY');
+      throw new Error('All TTS services failed. Please check Kokoro installation or set GEMINI_API_KEY/ELEVENLABS_API_KEY');
     }
 
     // Cache the result
@@ -90,7 +185,7 @@ export async function generateSpeech(options: TTSOptions): Promise<Buffer> {
     return audioBuffer;
 
   } catch (error: any) {
-    console.error('❌ TTS error:', error);
+    console.error('[TTS] Failed to generate speech:', error.message);
     throw new Error(`Failed to generate speech: ${error.message}`);
   }
 }
@@ -112,11 +207,10 @@ export async function generateSpeechToFile(
     // Write audio file
     await fs.writeFile(outputPath, audioBuffer);
     
-    console.log(`✅ Audio saved to: ${outputPath}`);
     return outputPath;
 
   } catch (error: any) {
-    console.error('❌ Error saving audio file:', error);
+    console.error('[TTS] Error saving audio file:', error.message);
     throw error;
   }
 }
@@ -133,7 +227,6 @@ export async function getAvailableVoices(languageCode: string = 'en-US'): Promis
     
     return [];
   } catch (error: any) {
-    console.error('❌ Error fetching voices:', error);
     return [];
   }
 }
@@ -198,17 +291,13 @@ export async function batchGenerateSpeech(
   preset: keyof typeof VoicePresets = 'AIRA_PROFESSIONAL'
 ): Promise<Buffer[]> {
   try {
-    console.log(`🎤 Batch generating speech for ${texts.length} texts`);
-    
     const audioBuffers = await Promise.all(
       texts.map(text => generateSpeechWithPreset(text, preset))
     );
-    
-    console.log(`✅ Batch generation complete: ${audioBuffers.length} audio files`);
     return audioBuffers;
 
   } catch (error: any) {
-    console.error('❌ Batch generation error:', error);
+    console.error('[TTS] Batch generation error:', error.message);
     throw error;
   }
 }

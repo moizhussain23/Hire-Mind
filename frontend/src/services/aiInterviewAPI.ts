@@ -161,7 +161,7 @@ export function playAudioFromBase64(
 /**
  * Upload and parse resume
  */
-export async function uploadResume(file: File): Promise<{
+export async function uploadResume(file: File, isTest: boolean = false): Promise<{
   resumeUrl: string;
   parsed: {
     skills: string[];
@@ -181,7 +181,10 @@ export async function uploadResume(file: File): Promise<{
     const formData = new FormData();
     formData.append('resume', file);
     
-    const response = await api.post('/resume/upload', formData, {
+    // Use test endpoint if it's for test page (no auth required)
+    const endpoint = isTest ? '/resume/test/upload' : '/resume/upload';
+    
+    const response = await api.post(endpoint, formData, {
       headers: {
         'Content-Type': 'multipart/form-data'
       }

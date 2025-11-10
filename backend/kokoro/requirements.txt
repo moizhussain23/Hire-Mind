@@ -1,0 +1,14 @@
+# Python dependencies for Kokoro TTS Server
+# Install with: pip install -r requirements.txt
+
+# Web framework for Kokoro TTS HTTP server
+flask>=3.0.0
+flask-cors>=4.0.0
+
+# Kokoro TTS
+kokoro>=0.9.4
+
+# Audio processing
+soundfile>=0.12.0
+torch>=2.0.0
+

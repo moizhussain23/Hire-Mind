@@ -24,18 +24,13 @@ const resolveMongoUri = (): string => {
     // Prefer values that look like a MongoDB connection string
     found = dynamicKeys.find((c) => /mongodb(\+srv)?:\/\//i.test(c.value || '')) || dynamicKeys[0]
 
-    if (dynamicKeys.length) {
-      const presentKeys = dynamicKeys.map((c) => c.key).join(', ')
-      console.log(`ℹ️ Detected potential MongoDB env keys: ${presentKeys}`)
-    }
   }
 
   if (found?.value) {
-    const masked = found.value.replace(/:\/\/(.+?):(.+?)@/, '://****:****@')
     return found.value
   }
 
-  console.warn('⚠️ No MongoDB env var found, defaulting to local mongodb://localhost:27017/ai-interview-platform')
+  console.warn('[DB] No MongoDB env var found, using default: mongodb://localhost:27017/ai-interview-platform')
   return 'mongodb://localhost:27017/ai-interview-platform'
 }
 
@@ -44,27 +39,25 @@ const connectDB = async (): Promise<void> => {
     const mongoURI = resolveMongoUri()
 
     await mongoose.connect(mongoURI)
-
-    console.log('✅ MongoDB connected successfully')
+    console.log('[DB] MongoDB connected')
 
     // Handle connection events
     mongoose.connection.on('error', (err) => {
-      console.error('❌ MongoDB connection error:', err)
+      console.error('[DB] Connection error:', err.message)
     })
 
     mongoose.connection.on('disconnected', () => {
-      console.log('⚠️ MongoDB disconnected')
+      console.warn('[DB] Disconnected')
     })
 
     // Graceful shutdown
     process.on('SIGINT', async () => {
       await mongoose.connection.close()
-      console.log('🔌 MongoDB connection closed through app termination')
       process.exit(0)
     })
 
   } catch (error) {
-    console.error('❌ MongoDB connection failed:', error)
+    console.error('[DB] Connection failed:', error)
     process.exit(1)
   }
 }

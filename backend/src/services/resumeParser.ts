@@ -1,6 +1,10 @@
-import * as pdfParse from 'pdf-parse';
 import natural from 'natural';
 import { analyzeResume } from './geminiService';
+
+// Import pdf-parse - it's a CommonJS module
+// pdf-parse v2.4.5 exports PDFParse as a class
+const pdfParseLib = require('pdf-parse');
+const PDFParse = pdfParseLib.PDFParse || pdfParseLib;
 
 const tokenizer = new natural.WordTokenizer();
 
@@ -31,9 +35,10 @@ export async function parseResume(pdfBuffer: Buffer): Promise<ParsedResume> {
   try {
     console.log('📄 Parsing resume PDF...');
 
-    // Extract text from PDF
-    const pdfData = await (pdfParse as any)(pdfBuffer);
-    const rawText = pdfData.text;
+    // Extract text from PDF using PDFParse class
+    const parser = new PDFParse({ data: pdfBuffer, verbosity: 0 });
+    const pdfData = await parser.getText({});
+    const rawText = pdfData.text || '';
 
     console.log(`✅ PDF parsed: ${rawText.length} characters`);
 

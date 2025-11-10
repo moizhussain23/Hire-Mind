@@ -6,8 +6,6 @@ const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:3000';
 
 // Run every 15 minutes to check for upcoming interviews
 cron.schedule('*/15 * * * *', async () => {
-  console.log('🔔 [Reminder Job] Checking for upcoming interviews...');
-  
   try {
     const now = new Date();
     
@@ -19,10 +17,8 @@ cron.schedule('*/15 * * * *', async () => {
     
     // Check for interviews in 2 days
     await send2DayReminders(now);
-    
-    console.log('✅ [Reminder Job] Check complete');
   } catch (error) {
-    console.error('❌ [Reminder Job] Error:', error);
+    console.error('[Reminder] Error:', error);
   }
 });
 
@@ -40,13 +36,10 @@ async function send30MinuteReminders(now: Date) {
     reminderSent30Min: { $ne: true }
   }).populate('interviewId');
   
-  console.log(`📧 Found ${sessions.length} interviews starting in 30 minutes`);
-  
   for (const session of sessions) {
     try {
       // Skip if no scheduled time
       if (!session.scheduledTime) {
-        console.log(`⚠️ Skipping session ${session.sessionToken} - no scheduled time`);
         continue;
       }
       
@@ -137,10 +130,8 @@ async function send30MinuteReminders(now: Date) {
       // Mark as sent
       session.reminderSent30Min = true;
       await session.save();
-      
-      console.log(`✅ Sent 30-min reminder to ${session.candidateEmail}`);
     } catch (error) {
-      console.error(`❌ Failed to send 30-min reminder to ${session.candidateEmail}:`, error);
+      console.error(`[Reminder] Failed to send 30-min reminder to ${session.candidateEmail}:`, error);
     }
   }
 }
@@ -159,13 +150,10 @@ async function send1DayReminders(now: Date) {
     reminderSent1Day: { $ne: true }
   });
   
-  console.log(`📧 Found ${sessions.length} interviews in 1 day`);
-  
   for (const session of sessions) {
     try {
       // Skip if no scheduled time
       if (!session.scheduledTime) {
-        console.log(`⚠️ Skipping session ${session.sessionToken} - no scheduled time`);
         continue;
       }
       
@@ -238,10 +226,8 @@ async function send1DayReminders(now: Date) {
       
       session.reminderSent1Day = true;
       await session.save();
-      
-      console.log(`✅ Sent 1-day reminder to ${session.candidateEmail}`);
     } catch (error) {
-      console.error(`❌ Failed to send 1-day reminder to ${session.candidateEmail}:`, error);
+      console.error(`[Reminder] Failed to send 1-day reminder to ${session.candidateEmail}:`, error);
     }
   }
 }
@@ -260,13 +246,10 @@ async function send2DayReminders(now: Date) {
     reminderSent2Days: { $ne: true }
   });
   
-  console.log(`📧 Found ${sessions.length} interviews in 2 days`);
-  
   for (const session of sessions) {
     try {
       // Skip if no scheduled time
       if (!session.scheduledTime) {
-        console.log(`⚠️ Skipping session ${session.sessionToken} - no scheduled time`);
         continue;
       }
       
@@ -332,14 +315,10 @@ async function send2DayReminders(now: Date) {
       
       session.reminderSent2Days = true;
       await session.save();
-      
-      console.log(`✅ Sent 2-day reminder to ${session.candidateEmail}`);
     } catch (error) {
-      console.error(`❌ Failed to send 2-day reminder to ${session.candidateEmail}:`, error);
+      console.error(`[Reminder] Failed to send 2-day reminder to ${session.candidateEmail}:`, error);
     }
   }
 }
-
-console.log('✅ [Reminder Jobs] Initialized - Running every 15 minutes');
 
 export default {};

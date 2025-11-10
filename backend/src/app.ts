@@ -37,6 +37,7 @@ import sessionRoutes from './routes/session' // Phase 2: Session management
 import verificationRoutes from './routes/verification' // Phase 0: Identity verification
 import aiInterviewRoutes from './routes/aiInterview' // AI Interview (Gemini + TTS)
 import ttsRoutes from './routes/tts' // TTS (Text-to-Speech) service
+import ttsComparisonRoutes from './routes/ttsComparison' // TTS comparison (Cloud vs Local)
 import resumeRoutes from './routes/resume' // Resume parsing
 import testInterviewRoutes from './routes/testInterview' // Test interview endpoint
 
@@ -104,25 +105,19 @@ app.use('/api/sessions', sessionRoutes) // Phase 2: Session management
 app.use('/api/verification', verificationRoutes) // Phase 0: Identity verification
 app.use('/api/ai-interview', aiInterviewRoutes) // AI Interview (Gemini + TTS)
 app.use('/api/tts', ttsRoutes) // TTS (Text-to-Speech) service
+app.use('/api/tts-comparison', ttsComparisonRoutes) // TTS comparison (Cloud vs Local)
 app.use('/api/resume', resumeRoutes) // Resume parsing
 app.use('/api/test-interview', testInterviewRoutes) // Test interview endpoint
 
 // Socket.IO for real-time communication
 io.on('connection', (socket) => {
-  console.log('User connected:', socket.id)
-
   socket.on('join-interview', (interviewId) => {
     socket.join(interviewId)
-    console.log(`User ${socket.id} joined interview ${interviewId}`)
   })
 
   socket.on('audio-data', (data) => {
     // Broadcast audio data to other participants
     socket.to(data.interviewId).emit('audio-data', data)
-  })
-
-  socket.on('disconnect', () => {
-    console.log('User disconnected:', socket.id)
   })
 })
 
@@ -153,12 +148,24 @@ const startServer = async () => {
     const { initializeSchedulers } = await import('./jobs/sessionScheduler')
     initializeSchedulers()
     
+    // Start Kokoro TTS server (persistent, keeps pipeline initialized)
+    try {
+      const { startKokoroServer } = await import('./utils/kokoroServerManager')
+      // Start in background (don't block server startup)
+      startKokoroServer().catch(err => {
+        console.error('[Kokoro] Failed to start (will use fallbacks):', err.message)
+      })
+    } catch (error: any) {
+      // Silently fail - Kokoro is optional
+    }
+    
     server.listen(PORT, () => {
-      console.log(`🚀 Server running on port ${PORT}`)
-      console.log(`📊 Health check: http://localhost:${PORT}/health`)
+      console.log(`[Server] Running on port ${PORT}`)
+      console.log(`[Server] Health: http://localhost:${PORT}/health`)
+      console.log(`[TTS] Kokoro server Starting...`)
     })
   } catch (error) {
-    console.error('Failed to start server:', error)
+    console.error('[Server] Failed to start:', error)
     process.exit(1)
   }
 }
