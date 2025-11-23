@@ -57,10 +57,10 @@ def load_voice(voice_name: str):
     if not voice_path.exists():
         raise FileNotFoundError(f"Voice file not found: {voice_path}")
     
-    print(f"Loading voice: {voice_name}", flush=True)
+    # print(f"Loading voice: {voice_name}", flush=True)
     voice_tensor = torch.load(str(voice_path), weights_only=True)
     voice_tensors[voice_name] = voice_tensor
-    print(f"Voice loaded: {voice_name}", flush=True)
+    # print(f"Voice loaded: {voice_name}", flush=True)
     return voice_tensor
 
 @app.route('/health', methods=['GET'])

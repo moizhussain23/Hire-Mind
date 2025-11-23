@@ -27,6 +27,44 @@ interface Candidate {
   communication?: number
   isSelected?: boolean
   resumeUrl?: string | null
+  // Enhanced interview data for comprehensive reports
+  resumeData?: {
+    skills: string[]
+    experience: string[]
+    education: string[]
+    projects: string[]
+    summary: string
+    workExperience: Array<{
+      company: string
+      position: string
+      duration: string
+      description: string
+    }>
+    totalExperience: number
+  }
+  interviewTranscript?: string
+  questionsAsked?: Array<{
+    question: string
+    answer: string
+    score?: number
+    feedback?: string
+  }>
+  codingChallenges?: Array<{
+    problem: string
+    solution: string
+    testsPassed: number
+    totalTests: number
+    executionTime: number
+  }>
+  aiInsights?: {
+    strengths: string[]
+    weaknesses: string[]
+    recommendation: string
+    culturalFit: number
+    technicalFit: number
+  }
+  interviewDuration?: number
+  invitationToken?: string
 }
 
 interface Interview {
@@ -65,6 +103,7 @@ const HRDashboard = () => {
   const [editingInterview, setEditingInterview] = useState<any>(null)
   const [showInviteToast, setShowInviteToast] = useState(false)
   const [showShareToast, setShowShareToast] = useState(false)
+  const [showDownloadToast, setShowDownloadToast] = useState(false)
   const [showCreateToast, setShowCreateToast] = useState(false)
   const [showErrorToast, setShowErrorToast] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
@@ -85,6 +124,88 @@ const HRDashboard = () => {
   // Manual refresh only - no auto-refresh to avoid disrupting HR work
   const handleManualRefresh = () => {
     refetch()
+  }
+  
+  // Function to fetch comprehensive interview data for PDF generation
+  const fetchComprehensiveInterviewData = async (candidate: Candidate): Promise<Candidate> => {
+    try {
+      console.log('📊 Fetching comprehensive interview data for:', candidate.name);
+      
+      // If candidate has invitation token, fetch enhanced data
+      if (candidate.invitationToken) {
+        const response = await fetch('/api/ai-interview/comprehensive-report', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            invitationToken: candidate.invitationToken,
+            candidateId: candidate.id 
+          })
+        });
+        
+        if (response.ok) {
+          const enhancedData = await response.json();
+          
+          return {
+            ...candidate,
+            resumeData: enhancedData.resumeData,
+            interviewTranscript: enhancedData.interviewTranscript,
+            questionsAsked: enhancedData.questionsAsked,
+            codingChallenges: enhancedData.codingChallenges,
+            aiInsights: enhancedData.aiInsights,
+            interviewDuration: enhancedData.interviewDuration
+          };
+        }
+      }
+      
+      // Fallback: Try to fetch basic enhanced data
+      const fallbackResponse = await fetch('/api/candidates/enhanced-data', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ candidateId: candidate.id })
+      });
+      
+      if (fallbackResponse.ok) {
+        const fallbackData = await fallbackResponse.json();
+        return { ...candidate, ...fallbackData };
+      }
+      
+    } catch (error) {
+      console.warn('⚠️ Failed to fetch comprehensive data, using basic candidate info:', error);
+    }
+    
+    return candidate; // Return original candidate if enhancement fails
+  }
+  
+  // Enhanced PDF generation with comprehensive data
+  const handleDownloadComprehensiveReport = async (candidate: Candidate) => {
+    try {
+      console.log('📄 Generating comprehensive interview report for:', candidate.name);
+      
+      // Show loading state
+      const loadingToast = document.createElement('div');
+      loadingToast.className = 'fixed top-4 right-4 bg-blue-500 text-white px-4 py-2 rounded shadow-lg z-50';
+      loadingToast.textContent = 'Generating comprehensive report...';
+      document.body.appendChild(loadingToast);
+      
+      // Fetch comprehensive data
+      const enhancedCandidate = await fetchComprehensiveInterviewData(candidate);
+      
+      // Generate PDF with enhanced data
+      generateCandidatePDF(enhancedCandidate);
+      
+      // Remove loading toast
+      document.body.removeChild(loadingToast);
+      
+      // Show success message
+      setShowDownloadToast(true);
+      setTimeout(() => setShowDownloadToast(false), 3000);
+      
+    } catch (error) {
+      console.error('❌ Failed to generate comprehensive report:', error);
+      
+      // Fallback to basic PDF
+      generateCandidatePDF(candidate);
+    }
   }
 
   const handleCreateInterview = async (data: InterviewData) => {
@@ -794,20 +915,60 @@ const HRDashboard = () => {
                           )}
                         </td>
                         <td className="px-6 py-4">
-                          {candidate.status === 'completed' && candidate.confidenceScore ? (
-                            <div className="space-y-1">
-                              <div className="flex items-center justify-between text-xs">
-                                <span className="text-gray-500">Confidence</span>
-                                <span className="font-semibold text-gray-700">{candidate.confidenceScore}%</span>
-                              </div>
-                              <div className="flex items-center justify-between text-xs">
-                                <span className="text-gray-500">Technical</span>
-                                <span className="font-semibold text-gray-700">{candidate.technicalDepth}%</span>
-                              </div>
-                              <div className="flex items-center justify-between text-xs">
-                                <span className="text-gray-500">Communication</span>
-                                <span className="font-semibold text-gray-700">{candidate.communication}%</span>
-                              </div>
+                          {candidate.status === 'completed' ? (
+                            <div className="space-y-2">
+                              {/* Dynamic AI Insights */}
+                              {candidate.aiInsights?.recommendation ? (
+                                <div className="bg-gray-50 p-2 rounded text-xs">
+                                  <div className="font-semibold text-gray-700 mb-1">AI Assessment:</div>
+                                  <div className="text-gray-600 line-clamp-2">
+                                    {candidate.aiInsights.recommendation.substring(0, 120)}...
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="space-y-1">
+                                  <div className="flex items-center justify-between text-xs">
+                                    <span className="text-gray-500">Overall Score</span>
+                                    <span className="font-semibold text-gray-700">{candidate.score || 0}%</span>
+                                  </div>
+                                  <div className="flex items-center justify-between text-xs">
+                                    <span className="text-gray-500">Technical</span>
+                                    <span className="font-semibold text-gray-700">{candidate.technicalDepth || 0}%</span>
+                                  </div>
+                                  <div className="flex items-center justify-between text-xs">
+                                    <span className="text-gray-500">Communication</span>
+                                    <span className="font-semibold text-gray-700">{candidate.communication || 0}%</span>
+                                  </div>
+                                </div>
+                              )}
+                              
+                              {/* Key Strengths */}
+                              {candidate.aiInsights?.strengths && candidate.aiInsights.strengths.length > 0 && (
+                                <div className="bg-green-50 p-2 rounded">
+                                  <div className="text-xs font-semibold text-green-700 mb-1">Key Strengths:</div>
+                                  <div className="text-xs text-green-600">
+                                    • {candidate.aiInsights.strengths[0].substring(0, 80)}...
+                                  </div>
+                                </div>
+                              )}
+                              
+                              {/* Areas to Improve */}
+                              {candidate.aiInsights?.weaknesses && candidate.aiInsights.weaknesses.length > 0 && (
+                                <div className="bg-orange-50 p-2 rounded">
+                                  <div className="text-xs font-semibold text-orange-700 mb-1">Areas to Improve:</div>
+                                  <div className="text-xs text-orange-600">
+                                    • {candidate.aiInsights.weaknesses[0].substring(0, 80)}...
+                                  </div>
+                                </div>
+                              )}
+                              
+                              {/* Interview Stats */}
+                              {candidate.questionsAsked && candidate.questionsAsked.length > 0 && (
+                                <div className="flex items-center justify-between text-xs bg-blue-50 p-1 rounded">
+                                  <span className="text-blue-600">{candidate.questionsAsked.length} Questions</span>
+                                  <span className="text-blue-600">{candidate.interviewDuration || 'N/A'} min</span>
+                                </div>
+                              )}
                             </div>
                           ) : (
                             <span className="text-sm text-gray-400">-</span>
@@ -838,10 +999,10 @@ const HRDashboard = () => {
                               <button 
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  generateCandidatePDF(candidate);
+                                  handleDownloadComprehensiveReport(candidate);
                                 }}
                                 className="p-2 bg-emerald-100 text-emerald-600 rounded-lg hover:bg-emerald-200 transition-all hover:scale-110"
-                                title="Download PDF Report"
+                                title="Download Comprehensive Interview Report"
                               >
                                 <Download className="h-4 w-4" />
                               </button>
@@ -976,21 +1137,83 @@ const HRDashboard = () => {
                                 };
 
                                 // Download interview summary as PDF
+                                // Get actual statistics from completed candidates for this interview
+                                const interviewCandidates = transformedCandidates.filter(c => 
+                                  c.position === interview.jobTitle && c.status === 'completed'
+                                );
+                                
+                                const avgScore = interviewCandidates.length > 0 ? 
+                                  Math.round(interviewCandidates.reduce((sum, c) => sum + (c.score || 0), 0) / interviewCandidates.length) : 0;
+                                
+                                const avgConfidence = interviewCandidates.length > 0 ? 
+                                  Math.round(interviewCandidates.reduce((sum, c) => sum + (c.confidenceScore || 0), 0) / interviewCandidates.length) : 0;
+                                
+                                const avgTechnical = interviewCandidates.length > 0 ? 
+                                  Math.round(interviewCandidates.reduce((sum, c) => sum + (c.technicalDepth || 0), 0) / interviewCandidates.length) : 0;
+                                
+                                const avgCommunication = interviewCandidates.length > 0 ? 
+                                  Math.round(interviewCandidates.reduce((sum, c) => sum + (c.communication || 0), 0) / interviewCandidates.length) : 0;
+                                
+                                const totalQuestions = interviewCandidates.reduce((sum, c) => sum + (c.questionsAsked?.length || 0), 0);
+                                const avgInterviewTime = interviewCandidates.length > 0 ? 
+                                  Math.round(interviewCandidates.reduce((sum, c) => sum + (c.interviewDuration || 30), 0) / interviewCandidates.length) : 30;
+                                
                                 const interviewData = {
-                                  name: interview.jobTitle,
-                                  email: 'Interview Summary',
+                                  name: `${interview.jobTitle} - Interview Summary`,
+                                  email: `${interviewCandidates.length} candidates completed`,
                                   position: interview.jobTitle,
                                   interviewDate: new Date(interview.createdDate).toLocaleDateString(),
                                   invitedDate: new Date(interview.createdDate).toLocaleDateString(),
                                   status: mapStatus(interview.status),
-                                  score: interview.totalCandidatesCompleted ? Math.round((interview.totalCandidatesCompleted / interview.totalCandidatesInvited!) * 100) : 0,
+                                  score: avgScore,
                                   interviewType: interview.interviewType,
                                   experienceLevel: interview.experienceLevel,
-                                  confidenceScore: 0,
-                                  technicalDepth: 0,
-                                  communication: 0
+                                  confidenceScore: avgConfidence,
+                                  technicalDepth: avgTechnical,
+                                  communication: avgCommunication,
+                                  // Add dynamic AI insights for the summary
+                                  aiInsights: {
+                                    strengths: [
+                                      `${interviewCandidates.length} candidates completed interviews`,
+                                      avgScore >= 70 ? 'Strong overall candidate performance' : 'Room for improvement in candidate selection',
+                                      totalQuestions > 0 ? `Total of ${totalQuestions} questions asked across all interviews` : 'Interview process documented'
+                                    ].filter(Boolean),
+                                    weaknesses: [
+                                      interviewCandidates.length < 3 ? 'Small sample size - consider more interviews' : null,
+                                      avgScore < 50 ? 'Low average performance - review interview criteria' : null,
+                                      avgTechnical < 60 ? 'Technical assessment needs improvement' : null
+                                    ].filter(Boolean),
+                                    recommendation: `Based on ${interviewCandidates.length} completed interviews for ${interview.jobTitle}, the average score is ${avgScore}%. ${
+                                      avgScore >= 75 ? 'Excellent candidate quality - recommend continuing with current process.' :
+                                      avgScore >= 60 ? 'Good candidate pool - minor adjustments may improve results.' :
+                                      'Consider revising interview criteria or providing additional candidate preparation.'
+                                    }`,
+                                    culturalFit: avgScore,
+                                    technicalFit: avgTechnical
+                                  },
+                                  questionsAsked: [{
+                                    question: 'Interview Summary Statistics',
+                                    answer: `Total interviews: ${interviewCandidates.length}, Average score: ${avgScore}%, Average duration: ${avgInterviewTime} minutes`,
+                                    score: avgScore,
+                                    feedback: `Performance analysis for ${interview.jobTitle} interview process.`
+                                  }],
+                                  interviewDuration: avgInterviewTime,
+                                  resumeData: {
+                                    summary: `Interview Summary for ${interview.jobTitle} - ${interviewCandidates.length} candidates evaluated`,
+                                    skills: [`Interview Management`, `Candidate Assessment`, interview.skillCategory],
+                                    experience: [`${interviewCandidates.length} candidate interviews`],
+                                    education: [],
+                                    projects: [`${interview.jobTitle} Hiring Process`],
+                                    workExperience: [{
+                                      company: 'Hire Mind',
+                                      position: 'Interview Analysis',
+                                      duration: `${Math.round((Date.now() - new Date(interview.createdDate).getTime()) / (1000 * 60 * 60 * 24))} days`,
+                                      description: `Conducted ${interviewCandidates.length} interviews with ${avgScore}% average success rate`
+                                    }],
+                                    totalExperience: interviewCandidates.length
+                                  }
                                 };
-                                generateCandidatePDF(interviewData);
+                                handleDownloadComprehensiveReport(interviewData);
                               }}
                               className="px-4 py-2 bg-emerald-100 text-emerald-600 rounded-lg hover:bg-emerald-200 transition-all flex items-center"
                               title="Download Interview Summary"
@@ -1129,6 +1352,11 @@ const HRDashboard = () => {
         message={errorMessage} 
         visible={showErrorToast} 
         type="error" 
+      />
+      <Toast 
+        message="Comprehensive interview report downloaded successfully!" 
+        visible={showDownloadToast} 
+        type="success" 
       />
 
       {/* Candidate Details View */}

@@ -22,7 +22,8 @@ import AcceptInvitation from './pages/AcceptInvitation'; // Phase 1: Invitation 
 import JoinInterview from './pages/JoinInterview'; // Phase 2: Join interview session
 import TestVerification from './pages/TestVerification'; // Test face verification
 import TestVerificationDeepFace from './pages/TestVerificationDeepFace'; // Test DeepFace verification
-import InterviewTest from './pages/InterviewTest'; // Test interview system
+import InterviewTest from './pages/InterviewTest';
+import CodingChallengeTest from './pages/CodingChallengeTest'; // Test interview system
 import { AuthProvider } from './contexts/AuthContext';
 
 // Get the Clerk publishable key from environment variables
@@ -42,6 +43,7 @@ function App() {
           <Route path="/test-verification-deepface" element={<TestVerificationDeepFace />} />
           <Route path="/test-interview" element={<InterviewTest />} />
           <Route path="/interview-test" element={<InterviewTest />} />
+          <Route path="/coding-test" element={<CodingChallengeTest />} />
           
           {/* All other routes wrapped in ClerkLoaded */}
           <Route path="/*" element={
@@ -68,8 +70,10 @@ function App() {
               
               {/* Protected Routes - Interviewee */}
               <Route path="/dashboard" element={<ProtectedIntervieweeRoute><Layout><Dashboard /></Layout></ProtectedIntervieweeRoute>} />
-              <Route path="/interview" element={<ProtectedIntervieweeRoute><Layout><Interview /></Layout></ProtectedIntervieweeRoute>} />
-              <Route path="/interview/:interviewId" element={<ProtectedIntervieweeRoute><Layout><Interview /></Layout></ProtectedIntervieweeRoute>} />
+              
+              {/* Interview Routes - Full screen without Layout */}
+              <Route path="/interview" element={<ProtectedIntervieweeRoute><Interview /></ProtectedIntervieweeRoute>} />
+              <Route path="/interview/:interviewId" element={<ProtectedIntervieweeRoute><Interview /></ProtectedIntervieweeRoute>} />
               <Route path="/hr/onboarding" element={<HROnboarding />} />
               <Route path="/hr/settings" element={<ProtectedHRRoute><HRSettings /></ProtectedHRRoute>} />
               <Route path="/hr" element={<ProtectedHRRoute><Layout><HRDashboard /></Layout></ProtectedHRRoute>} />

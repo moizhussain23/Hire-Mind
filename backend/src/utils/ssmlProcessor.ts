@@ -302,13 +302,14 @@ export function insertPausesIntoText(text: string, pauses: Array<{ position: num
  */
 export function cleanTextForTTS(text: string): string {
   return text
-    .replace(/\[(PAUSE|SHORT_PAUSE|LONG_PAUSE|BREATH)\]/g, ' ... ') // Replace markers with pauses
+    .replace(/\[(PAUSE|SHORT_PAUSE|LONG_PAUSE|BREATH)\]/g, ' ') // Remove markers completely - pauses should be handled by TTS system
     .replace(/\*\*(\w+)\*\*/g, '$1') // Remove **word**
     .replace(/\*(\w+)\*/g, '$1')     // Remove *word*
     .replace(/_(\w+)_/g, '$1')       // Remove _word_
     .replace(/<rate=[\d.]+>/g, '')   // Remove rate markers
     .replace(/<pitch=[+-]?\d+>/g, '') // Remove pitch markers
     .replace(/\s+/g, ' ')            // Normalize whitespace
+    .replace(/\.\.\./g, '.')         // Replace ellipsis with period for cleaner speech
     .trim();
 }
 
@@ -316,17 +317,12 @@ export function cleanTextForTTS(text: string): string {
  * Add natural pauses to text based on content
  */
 export function addNaturalPauses(text: string): string {
-  // Add pauses after sentences
-  text = text.replace(/([.!?])\s+/g, '$1 [PAUSE] ');
+  // Don't add explicit pause markers - rely on natural speech patterns
+  // TTS systems handle punctuation pauses automatically
   
-  // Add short pauses after commas
-  text = text.replace(/,\s+/g, ', [SHORT_PAUSE] ');
-  
-  // Add breath before long sentences
-  const sentences = text.split(/[.!?]/);
-  if (sentences.some(s => s.length > 100)) {
-    text = text.replace(/([.!?])\s+([A-Z])/g, '$1 [BREATH] $2');
-  }
+  // Just ensure proper spacing after punctuation
+  text = text.replace(/([.!?])\s*/g, '$1 ');
+  text = text.replace(/,\s*/g, ', ');
   
   return text;
 }

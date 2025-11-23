@@ -1,4 +1,6 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import CodingQuestionBankService from './codingQuestionBank';
+import { CodingQuestion } from '../models/QuestionBank';
 
 // Initialize Gemini AI
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
@@ -62,6 +64,14 @@ interface QuestionContext {
     experience: string[];
     education: string[];
     projects: string[];
+    summary?: string;
+    workExperience?: Array<{
+      company: string;
+      position: string;
+      duration: string;
+      description: string;
+    }>;
+    totalExperience?: number;
   };
   previousAnswers: string[];
   previousQuestions?: string[]; // Track previous questions to prevent repetition
@@ -127,10 +137,17 @@ export async function generateInterviewQuestion(
     let interviewPhase = originalInterviewPhase;
     
     if (questionNumber === 0 && previousAnswers.length > 0) {
-      console.warn('⚠️ Question #0 requested but previous answers exist - treating as question #1 instead');
-      // Treat as question 1 (behavioral phase)
-      questionNumber = 1;
-      interviewPhase = 'behavioral';
+      console.warn('⚠️ Question #0 requested but previous answers exist - treating as next question instead');
+      // Treat as next question in sequence
+      questionNumber = previousAnswers.length;
+      interviewPhase = previousAnswers.length < 3 ? 'behavioral' : 'technical';
+    }
+
+    // ADDITIONAL SAFEGUARD: If we have previous questions and this question was already asked
+    if (previousQuestions.length > 0 && questionNumber < previousQuestions.length) {
+      console.warn('⚠️ Question already asked - generating next question instead');
+      questionNumber = previousQuestions.length;
+      interviewPhase = previousQuestions.length < 3 ? 'behavioral' : 'technical';
     }
 
     // Build context-aware prompt
@@ -215,7 +232,7 @@ CANDIDATE PROFILE:
 - Experience Level: ${experienceLevel}
 - Top Skills: ${skills}
 - Recent Experience: ${experience}
-- Notable Project: ${projects}${conversationContext}
+- Notable Project: ${projects}${resumeData?.workExperience?.length ? `\n- Work History: ${resumeData.workExperience.map(job => `${job.position} at ${job.company} (${job.duration})`).slice(0, 3).join(', ')}` : ''}${resumeData?.totalExperience ? `\n- Total Experience: ${resumeData.totalExperience} years` : ''}${resumeData?.education?.length ? `\n- Education: ${resumeData.education.slice(0, 2).join(', ')}` : ''}${resumeData?.summary ? `\n- Professional Summary: ${resumeData.summary.substring(0, 200)}` : ''}${conversationContext}
 
 CONVERSATIONAL SKILLS - CRITICAL:
 1. **Active Listening & Resume References**: Reference specific things from their resume AND previous answers
@@ -443,7 +460,7 @@ Generate ONLY the complete question (1-3 sentences, no placeholders, no addition
     
     // Fallback to basic question if both models fail
     console.warn('⚠️ Using fallback question due to API error');
-    return getFallbackQuestion(context);
+    return await getFallbackQuestion(context);
   }
 }
 
@@ -868,7 +885,7 @@ Extract and return in this EXACT JSON format (no markdown):
 /**
  * Fallback question if Gemini API fails
  */
-function getFallbackQuestion(context: QuestionContext): string {
+async function getFallbackQuestion(context: QuestionContext): Promise<string> {
   const { candidateName, questionNumber, interviewPhase } = context;
 
   if (questionNumber === 0) {
@@ -924,6 +941,227 @@ function getFallbackScore(context: ScoringContext): InterviewScore {
       problemSolving: problemSolved ? 'Successfully solved the problem.' : 'Struggled with problem-solving.'
     }
   };
+}
+
+/**
+ * Get coding question from question bank
+ */
+async function getCodingQuestionFromBank(criteria: {
+  experienceLevel?: 'fresher' | 'mid' | 'senior';
+  domain?: string[];
+  excludeQuestionIds?: string[];
+}): Promise<any> {
+  try {
+    const question = await CodingQuestionBankService.selectQuestion({
+      experienceLevel: criteria.experienceLevel || 'fresher',
+      domain: criteria.domain || ['general'],
+      excludeQuestionIds: criteria.excludeQuestionIds || []
+    });
+    return question;
+  } catch (error) {
+    console.error('Error fetching coding question:', error);
+    return null;
+  }
+}
+
+/**
+ * Convert skill category to domain array
+ */
+function getDomainsFromSkillCategory(skillCategory: string): string[] {
+  const categoryMap: Record<string, string[]> = {
+    'technical': ['general'],
+    'frontend': ['frontend'],
+    'backend': ['backend'],
+    'fullstack': ['fullstack'],
+    'mobile': ['general'],
+    'devops': ['backend']
+  };
+  
+  return categoryMap[skillCategory] || ['general'];
+}
+
+/**
+ * Extract question ID from question text (if embedded)
+ */
+function extractQuestionId(questionText: string): string | null {
+  const match = questionText.match(/\[ID:([^\]]+)\]/);
+  return match ? match[1] : null;
+}
+
+/**
+ * Analyze ID Document using Gemini Vision for OCR
+ */
+export async function analyzeIDDocument(base64Image: string, mimeType: string): Promise<{
+  name: string | null;
+  dateOfBirth: string | null;
+  documentType: string | null;
+  expiryDate: string | null;
+  confidence: number;
+}> {
+  try {
+    console.log('🔍 Starting ID document analysis with Gemini Vision...');
+
+    // Use Gemini Vision model for document analysis
+    const visionModel = genAI.getGenerativeModel({ 
+      model: 'gemini-1.5-flash',
+      generationConfig: {
+        temperature: 0.1, // Very low temperature for accurate data extraction
+        topP: 0.8,
+        topK: 20,
+        maxOutputTokens: 1024,
+      }
+    });
+
+    const prompt = `You are an expert OCR system for identity document verification. Analyze this ID document image and extract the following information with high accuracy.
+
+IMPORTANT: Respond ONLY with a valid JSON object containing the extracted data. Do not include any other text, explanations, or formatting.
+
+Extract these fields:
+- name: Full name as it appears on the document
+- dateOfBirth: Date of birth in YYYY-MM-DD format
+- documentType: Type of document (passport, driver's license, national ID, etc.)
+- expiryDate: Expiry date in YYYY-MM-DD format (if available)
+- confidence: Your confidence level (0-100) in the accuracy of extraction
+
+JSON Response Format:
+{
+  "name": "extracted name or null",
+  "dateOfBirth": "YYYY-MM-DD or null",
+  "documentType": "document type or null",
+  "expiryDate": "YYYY-MM-DD or null",
+  "confidence": 85
+}
+
+Rules:
+- If a field cannot be clearly read, set it to null
+- Confidence should reflect overall extraction accuracy
+- Only return the JSON object, no additional text
+- Ensure dates are in YYYY-MM-DD format`;
+
+    const imageParts = [
+      {
+        inlineData: {
+          data: base64Image,
+          mimeType: mimeType
+        }
+      }
+    ];
+
+    const result = await visionModel.generateContent([prompt, ...imageParts]);
+    const response = await result.response;
+    const text = response.text().trim();
+
+    console.log('📄 Raw OCR response:', text);
+
+    // Parse JSON response
+    try {
+      const extractedData = JSON.parse(text);
+      
+      // Validate extracted data structure
+      const validatedData = {
+        name: extractedData.name || null,
+        dateOfBirth: extractedData.dateOfBirth || null,
+        documentType: extractedData.documentType || null,
+        expiryDate: extractedData.expiryDate || null,
+        confidence: Math.min(Math.max(extractedData.confidence || 0, 0), 100)
+      };
+
+      console.log('✅ ID document analysis completed:', validatedData);
+      return validatedData;
+
+    } catch (parseError) {
+      console.warn('⚠️ Failed to parse OCR JSON response, extracting manually:', parseError);
+      
+      // Fallback: try to extract data manually from text
+      const manualExtraction = extractDataFromText(text);
+      return {
+        ...manualExtraction,
+        confidence: 30 // Lower confidence for manual extraction
+      };
+    }
+
+  } catch (error: any) {
+    console.error('❌ ID document analysis error:', error);
+    
+    // Return null data with zero confidence
+    return {
+      name: null,
+      dateOfBirth: null,
+      documentType: null,
+      expiryDate: null,
+      confidence: 0
+    };
+  }
+}
+
+/**
+ * Manual extraction fallback when JSON parsing fails
+ */
+function extractDataFromText(text: string): {
+  name: string | null;
+  dateOfBirth: string | null;
+  documentType: string | null;
+  expiryDate: string | null;
+} {
+  console.log('🔧 Attempting manual data extraction...');
+  
+  try {
+    // Try to find name patterns
+    const nameMatch = text.match(/name[:\s]+(.*?)(?:\n|$)/i);
+    const name = nameMatch ? nameMatch[1].trim() : null;
+
+    // Try to find date patterns (YYYY-MM-DD, MM/DD/YYYY, DD/MM/YYYY)
+    const datePattern = /(\d{4}-\d{2}-\d{2}|\d{2}\/\d{2}\/\d{4}|\d{2}-\d{2}-\d{4})/g;
+    const dates = text.match(datePattern) || [];
+    
+    const dateOfBirth = dates[0] ? normalizeDate(dates[0]) : null;
+    const expiryDate = dates[1] ? normalizeDate(dates[1]) : null;
+
+    // Try to identify document type
+    let documentType = null;
+    if (text.toLowerCase().includes('passport')) documentType = 'passport';
+    else if (text.toLowerCase().includes('driver')) documentType = 'driver\'s license';
+    else if (text.toLowerCase().includes('national id')) documentType = 'national ID';
+    else if (text.toLowerCase().includes('id card')) documentType = 'ID card';
+
+    return { name, dateOfBirth, documentType, expiryDate };
+    
+  } catch (error) {
+    console.warn('⚠️ Manual extraction also failed:', error);
+    return { name: null, dateOfBirth: null, documentType: null, expiryDate: null };
+  }
+}
+
+/**
+ * Normalize date to YYYY-MM-DD format
+ */
+function normalizeDate(dateString: string): string | null {
+  try {
+    // Handle different date formats
+    let date: Date;
+    
+    if (dateString.includes('-')) {
+      // YYYY-MM-DD or DD-MM-YYYY
+      const parts = dateString.split('-');
+      if (parts[0].length === 4) {
+        date = new Date(dateString); // YYYY-MM-DD
+      } else {
+        date = new Date(`${parts[2]}-${parts[1]}-${parts[0]}`); // DD-MM-YYYY
+      }
+    } else if (dateString.includes('/')) {
+      // MM/DD/YYYY or DD/MM/YYYY
+      const parts = dateString.split('/');
+      date = new Date(`${parts[2]}-${parts[0]}-${parts[1]}`); // Assume MM/DD/YYYY
+    } else {
+      return null;
+    }
+
+    if (isNaN(date.getTime())) return null;
+    
+    return date.toISOString().split('T')[0]; // Return YYYY-MM-DD
+  } catch (error) {
+    return null;
+  }
 }
 
 // Export model separately (functions are already exported at declaration)

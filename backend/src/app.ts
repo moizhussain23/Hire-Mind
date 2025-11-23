@@ -32,6 +32,7 @@ import hrProfileRoutes from './routes/hrProfile'
 import initRoutes from './routes/init'
 import webhookRoutes from './routes/webhook'
 import invitationRoutes from './routes/invitation' // Phase 1: Invitation system
+import invitationDataRoutes from './routes/invitationData' // Invitation data for interview loading
 import userRoutes from './routes/user' // User sync routes
 import sessionRoutes from './routes/session' // Phase 2: Session management
 import verificationRoutes from './routes/verification' // Phase 0: Identity verification
@@ -40,6 +41,7 @@ import ttsRoutes from './routes/tts' // TTS (Text-to-Speech) service
 import ttsComparisonRoutes from './routes/ttsComparison' // TTS comparison (Cloud vs Local)
 import resumeRoutes from './routes/resume' // Resume parsing
 import testInterviewRoutes from './routes/testInterview' // Test interview endpoint
+import codingQuestionRoutes from './routes/codingQuestion' // Coding question bank
 
 // Import middleware
 import { errorHandler } from './middleware/errorHandler'
@@ -100,6 +102,7 @@ app.use('/api/hr', hrRoutes)
 app.use('/api/hr-profile', hrProfileRoutes)
 app.use('/api/init', initRoutes)
 app.use('/api/invitations', invitationRoutes) // Phase 1: Invitation system
+app.use('/api/invitation', invitationDataRoutes) // Invitation data for interview loading
 app.use('/api/users', userRoutes) // User sync routes
 app.use('/api/sessions', sessionRoutes) // Phase 2: Session management
 app.use('/api/verification', verificationRoutes) // Phase 0: Identity verification
@@ -108,6 +111,7 @@ app.use('/api/tts', ttsRoutes) // TTS (Text-to-Speech) service
 app.use('/api/tts-comparison', ttsComparisonRoutes) // TTS comparison (Cloud vs Local)
 app.use('/api/resume', resumeRoutes) // Resume parsing
 app.use('/api/test-interview', testInterviewRoutes) // Test interview endpoint
+app.use('/api/coding', codingQuestionRoutes) // Coding question bank
 
 // Socket.IO for real-time communication
 io.on('connection', (socket) => {
@@ -143,6 +147,14 @@ const PORT = process.env.PORT || 5000
 const startServer = async () => {
   try {
     await connectDB()
+    
+    // Initialize coding question bank
+    try {
+      const { default: CodingQuestionBankService } = await import('./services/codingQuestionBank')
+      await CodingQuestionBankService.initializeQuestionBank()
+    } catch (error: any) {
+      console.log('[Question Bank] Initialization skipped:', error.message)
+    }
     
     // Initialize schedulers for Phase 2
     const { initializeSchedulers } = await import('./jobs/sessionScheduler')

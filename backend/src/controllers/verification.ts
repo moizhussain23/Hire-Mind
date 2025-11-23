@@ -60,7 +60,60 @@ export const uploadIDDocument = async (req: Request, res: Response): Promise<voi
       uploadedAt: new Date()
     };
 
-    // TODO: Extract name and photo from ID using OCR
+    // Extract name and photo from ID using OCR and AI analysis
+    try {
+      // Use Gemini Vision for OCR and data extraction
+      const { analyzeIDDocument } = await import('../services/geminiService');
+      
+      // Convert buffer to base64 for Gemini Vision
+      const base64Image = req.file!.buffer.toString('base64');
+      const mimeType = req.file!.mimetype;
+      
+      console.log('🔍 Analyzing ID document using Gemini Vision...');
+      
+      const extractedData = await analyzeIDDocument(base64Image, mimeType);
+      
+      // Update invitation with extracted data
+      if (!invitation.identityVerification) {
+        invitation.identityVerification = {
+          status: 'pending'
+        };
+      }
+      
+      if (!invitation.identityVerification.idDocument) {
+        invitation.identityVerification.idDocument = {
+          type: 'other' // Default type, can be updated later
+        };
+      }
+      
+      // Determine document type from extracted data or default to 'other'
+      let documentType: 'passport' | 'drivers_license' | 'national_id' | 'other' = 'other';
+      if (extractedData.documentType) {
+        const docType = extractedData.documentType.toLowerCase();
+        if (docType.includes('passport')) documentType = 'passport';
+        else if (docType.includes('driver')) documentType = 'drivers_license';
+        else if (docType.includes('national') || docType.includes('id')) documentType = 'national_id';
+      }
+      
+      invitation.identityVerification.idDocument = {
+        ...invitation.identityVerification.idDocument,
+        type: documentType,
+        extractedName: extractedData.name || undefined,
+        documentNumber: extractedData.dateOfBirth || undefined, // Store DOB in documentNumber for now
+        documentPhotoUrl: uploadResult.secure_url,
+        uploadedAt: new Date()
+      };
+      
+      console.log('✅ ID document analysis completed:', {
+        extractedName: extractedData.name,
+        documentType: extractedData.documentType,
+        confidence: extractedData.confidence
+      });
+      
+    } catch (ocrError) {
+      console.warn('⚠️ OCR extraction failed, proceeding without extracted data:', ocrError);
+      // Don't fail the upload if OCR fails - manual verification can still proceed
+    }
     // For now, we'll do this in a separate step
 
     await invitation.save();

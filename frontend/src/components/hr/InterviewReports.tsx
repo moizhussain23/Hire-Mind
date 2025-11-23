@@ -104,7 +104,7 @@ const InterviewReports: React.FC<InterviewReportsProps> = ({
             <div className="text-2xl font-bold text-red-600">
               {interviews.filter(i => i.evaluation?.overallScore && i.evaluation.overallScore < 50).length}
             </div>
-            <div className="text-sm text-red-800">Below Average (<50)</div>
+            <div className="text-sm text-red-800">Below Average (&lt;50)</div>
           </div>
         </div>
       </div>

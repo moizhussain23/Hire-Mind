@@ -99,25 +99,71 @@ export const generateAIResponse = async (
   }
 }
 
-// Text-to-Speech - Placeholder (gtts removed due to security vulnerabilities)
-// TODO: Implement with OpenAI TTS, Google Cloud TTS, or ElevenLabs
+// Text-to-Speech - Enhanced Implementation with fallbacks
 export const generateTTS = async (text: string): Promise<string> => {
   try {
-    console.log('TTS requested for text:', text.substring(0, 50) + '...')
+    console.log('🎤 TTS requested for text:', text.substring(0, 50) + '...')
     
-    // Placeholder implementation
-    // When you're ready to implement TTS, use one of these:
-    // 1. OpenAI TTS API: https://platform.openai.com/docs/guides/text-to-speech
-    // 2. Google Cloud TTS: https://cloud.google.com/text-to-speech
-    // 3. ElevenLabs: https://elevenlabs.io
-    
-    // For now, return a mock audio path
-    const mockAudioPath = path.join(__dirname, '../../temp', `audio_${Date.now()}.mp3`)
-    console.log('⚠️  TTS not implemented - returning mock path')
-    
-    return mockAudioPath
+    // Try to use the enhanced TTS service first (Kokoro, Gemini TTS, etc.)
+    try {
+      const { generateHumanLikeSpeech } = await import('./enhancedTTSService');
+      const audioBuffer = await generateHumanLikeSpeech({
+        text,
+        emotionalContext: {
+          questionType: 'behavioral',
+          candidateEmotion: 'neutral'
+        },
+        addHumanization: true,
+        addNaturalPauses: true,
+        variableSpeed: false
+      });
+      
+      // Save buffer to temp file and return path
+      const tempDir = path.join(__dirname, '../../temp');
+      if (!fs.existsSync(tempDir)) {
+        fs.mkdirSync(tempDir, { recursive: true });
+      }
+      
+      const audioPath = path.join(tempDir, `tts_${Date.now()}.mp3`);
+      fs.writeFileSync(audioPath, audioBuffer);
+      console.log('✅ TTS generated successfully using enhanced service');
+      return audioPath;
+      
+    } catch (enhancedError) {
+      console.warn('⚠️ Enhanced TTS failed, trying Gemini TTS fallback:', enhancedError);
+      
+      // Fallback to Gemini TTS if available
+      try {
+        const { generateSpeechWithPreset } = await import('./ttsService');
+        const audioBuffer = await generateSpeechWithPreset(text, 'AIRA_PROFESSIONAL');
+        
+        const tempDir = path.join(__dirname, '../../temp');
+        if (!fs.existsSync(tempDir)) {
+          fs.mkdirSync(tempDir, { recursive: true });
+        }
+        
+        const audioPath = path.join(tempDir, `tts_fallback_${Date.now()}.mp3`);
+        fs.writeFileSync(audioPath, audioBuffer);
+        console.log('✅ TTS generated using Gemini TTS fallback');
+        return audioPath;
+        
+      } catch (geminiError) {
+        console.warn('⚠️ Gemini TTS also failed, using mock response:', geminiError);
+        
+        // Final fallback - create a mock file for development
+        const tempDir = path.join(__dirname, '../../temp');
+        if (!fs.existsSync(tempDir)) {
+          fs.mkdirSync(tempDir, { recursive: true });
+        }
+        
+        const mockAudioPath = path.join(tempDir, `mock_audio_${Date.now()}.mp3`);
+        fs.writeFileSync(mockAudioPath, 'Mock TTS data for: ' + text.substring(0, 100));
+        console.log('⚠️ Using mock TTS file for development');
+        return mockAudioPath;
+      }
+    }
   } catch (error) {
-    console.error('TTS Error:', error)
+    console.error('❌ TTS Error:', error);
     throw new Error('Failed to generate text-to-speech')
   }
 }

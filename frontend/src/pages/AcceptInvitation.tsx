@@ -58,6 +58,7 @@ const AcceptInvitation = () => {
   
   // Identity verification state
   const [showVerification, setShowVerification] = useState(false)
+  const [verificationCompleted, setVerificationCompleted] = useState(false)
   const [isVerified, setIsVerified] = useState(false)
 
   // Fetch invitation details only if user is signed in
@@ -161,6 +162,7 @@ const AcceptInvitation = () => {
     setIsVerified(verified)
     if (verified && idUrl) {
       setIdDocumentUrl(idUrl)
+      setVerificationCompleted(true)
       setShowVerification(false)
       
       // Upload resume AFTER verification with verified name
@@ -246,7 +248,7 @@ const AcceptInvitation = () => {
     } catch (err: any) {
       console.error('Error accepting invitation:', err)
       setError(err.response?.data?.error || 'Failed to accept invitation')
-    } finally {
+    } finally { 
       setSubmitting(false)
     }
   }
@@ -526,15 +528,66 @@ const AcceptInvitation = () => {
             </div>
           )}
 
+          {/* Identity Verification Button */}
+          {!verificationCompleted && (
+            <button
+              type="button"
+              onClick={() => setShowVerification(true)}
+              className="w-full bg-purple-600 text-white py-3 rounded-lg font-semibold hover:bg-purple-700 transition-colors mb-4 flex items-center justify-center gap-2"
+            >
+              Start Identity Verification
+            </button>
+          )}
+
+          {/* Verification Status */}
+          {verificationCompleted && (
+            <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-4 flex items-center gap-3">
+              <div className="w-8 h-8 bg-green-100 rounded-full flex items-center justify-center">
+                <span className="text-green-600 text-xl">✓</span>
+              </div>
+              <div>
+                <p className="text-green-800 font-semibold">Identity Verification Complete</p>
+                <p className="text-green-600 text-sm">Resume uploaded successfully</p>
+              </div>
+            </div>
+          )}
+
           {/* Submit Button */}
           <button
             type="submit"
-            disabled={submitting || !selectedTimeSlot || (interview?.requireResume && !resumeUrl)}
+            disabled={submitting || !selectedTimeSlot || !verificationCompleted || !resumeUrl}
             className="w-full bg-blue-600 text-white py-3 rounded-lg font-semibold hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
           >
             {submitting ? 'Accepting...' : 'Accept Invitation & Schedule Interview'}
           </button>
 
+          {/* Requirements Message */}
+          {(!selectedTimeSlot || !verificationCompleted || !resumeUrl) && (
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mt-4">
+              <p className="text-sm text-amber-800 font-medium mb-2">📋 Required to proceed:</p>
+              <div className="space-y-1 text-xs text-amber-700">
+                {!verificationCompleted && (
+                  <div className="flex items-center">
+                    <span className="w-4 h-4 border border-amber-400 rounded mr-2"></span>
+                    Click "Start Identity Verification" button above
+                  </div>
+                )}
+                {!resumeUrl && verificationCompleted && (
+                  <div className="flex items-center">
+                    <span className="w-4 h-4 border border-amber-400 rounded mr-2"></span>
+                    Resume will be uploaded after verification
+                  </div>
+                )}
+                {!selectedTimeSlot && (
+                  <div className="flex items-center">
+                    <span className="w-4 h-4 border border-amber-400 rounded mr-2"></span>
+                    Select an available time slot
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+          
           <p className="text-xs text-gray-500 text-center mt-4">
             By accepting, you agree to attend the interview at the selected time.
           </p>

@@ -9,6 +9,21 @@ export interface IInvitation extends Document {
   timeSlots: Date[] // 3 time options provided by HR
   selectedTimeSlot?: Date // Chosen by candidate
   resumeUrl?: string // Uploaded during acceptance
+  resumeData?: { // Parsed resume data for interview preparation
+    skills: string[]
+    experience: string[]
+    education: string[]
+    projects: string[]
+    summary: string
+    workExperience: Array<{
+      company: string
+      position: string
+      duration: string
+      description: string
+    }>
+    totalExperience: number
+    parsedAt: Date
+  }
   
   // Identity Verification (Fraud Prevention)
   identityVerification?: {
@@ -100,6 +115,21 @@ const InvitationSchema = new Schema<IInvitation>({
   },
   resumeUrl: {
     type: String
+  },
+  resumeData: {
+    skills: [String],
+    experience: [String],
+    education: [String],
+    projects: [String],
+    summary: String,
+    workExperience: [{
+      company: String,
+      position: String,
+      duration: String,
+      description: String
+    }],
+    totalExperience: Number,
+    parsedAt: Date
   },
   
   // Identity Verification

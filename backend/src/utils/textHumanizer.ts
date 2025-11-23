@@ -45,46 +45,35 @@ const EMOTIONAL_MARKERS = {
 };
 
 /**
- * Add natural pauses to text
+ * Add natural pauses to text (subtle, not explicit markers)
  */
 function addNaturalPauses(text: string): string {
-  // Add pauses after punctuation
-  text = text.replace(/\.\s+/g, '... ');
-  text = text.replace(/!\s+/g, '! ');
-  text = text.replace(/\?\s+/g, '? ');
+  // Only add subtle pauses, not explicit markers that get spoken
   
-  // Add pauses after commas (shorter)
-  text = text.replace(/,\s+/g, ', ');
-  
-  // Add thinking pauses before questions
-  if (text.includes('?')) {
-    text = text.replace(/([A-Z][^.!?]*\?)/g, '... $1');
+  // Add brief thinking pauses before questions (only for long questions)
+  if (text.includes('?') && text.length > 100) {
+    text = text.replace(/([A-Z][^.!?]{50,}\?)/g, '... $1');
   }
   
   return text;
 }
 
 /**
- * Add conversational fillers
+ * Add conversational fillers (very conservative)
  */
 function addConversationalFillers(text: string, tone: string = 'neutral'): string {
+  // Be very conservative with fillers to avoid changing the original meaning
   const sentences = text.split(/(?<=[.!?])\s+/);
   
   if (sentences.length === 0) return text;
   
-  // Add filler to first sentence (30% chance)
-  if (Math.random() < 0.3) {
+  // Only add fillers to opening questions or if explicitly supportive tone
+  if (tone === 'supportive' && Math.random() < 0.2) {
     const filler = getRandomItem(FILLERS.thinking);
     sentences[0] = `${filler} ${sentences[0]}`;
   }
   
-  // Add transition fillers between sentences (20% chance)
-  for (let i = 1; i < sentences.length; i++) {
-    if (Math.random() < 0.2) {
-      const filler = getRandomItem(FILLERS.transition);
-      sentences[i] = `${filler} ${sentences[i]}`;
-    }
-  }
+  // Don't add transition fillers - keep original text clean
   
   return sentences.join(' ');
 }
@@ -95,11 +84,12 @@ function addConversationalFillers(text: string, tone: string = 'neutral'): strin
 function addBreathMarkers(text: string): string {
   const sentences = text.split(/(?<=[.!?])\s+/);
   
-  // Add breath after every 2-3 sentences
+  // Add breath after every 2-3 sentences, but ONLY if sentences are long enough
   const result: string[] = [];
   for (let i = 0; i < sentences.length; i++) {
     result.push(sentences[i]);
-    if ((i + 1) % 2 === 0 && i < sentences.length - 1) {
+    // Only add breath if current sentence is substantial and there are more sentences
+    if ((i + 1) % 2 === 0 && i < sentences.length - 1 && sentences[i].length > 50) {
       result.push('[BREATH]');
     }
   }
@@ -123,14 +113,14 @@ function addEmphasis(text: string, emotionalTone: string = 'neutral'): string {
 }
 
 /**
- * Add emotional prefix based on tone
+ * Add emotional prefix based on tone (conservative)
  */
 function addEmotionalPrefix(text: string, tone: string): string {
   const markers = EMOTIONAL_MARKERS[tone as keyof typeof EMOTIONAL_MARKERS];
   if (!markers || markers.prefix.length === 0) return text;
   
-  // 40% chance to add emotional prefix
-  if (Math.random() < 0.4) {
+  // Only add emotional prefix for very specific tones and low probability
+  if ((tone === 'supportive' || tone === 'excited') && Math.random() < 0.15) {
     const prefix = getRandomItem(markers.prefix);
     return `${prefix} ${text}`;
   }
@@ -174,7 +164,7 @@ function getRandomItem<T>(array: T[]): T {
 }
 
 /**
- * Main humanize function
+ * Main humanize function (conservative approach)
  */
 export function humanizeText(text: string, options: HumanizeOptions = {}): string {
   const {
@@ -187,31 +177,27 @@ export function humanizeText(text: string, options: HumanizeOptions = {}): strin
   
   let humanizedText = text;
   
-  // 1. Add emotional prefix
-  humanizedText = addEmotionalPrefix(humanizedText, emotionalTone);
+  // Be very conservative - only add minimal humanization
   
-  // 2. Add thinking pauses before questions
-  if (addThinkingPauses) {
+  // 1. Add emotional prefix (very rare)
+  if (emotionalTone === 'supportive' || emotionalTone === 'excited') {
+    humanizedText = addEmotionalPrefix(humanizedText, emotionalTone);
+  }
+  
+  // 2. Add thinking pauses before questions (only for long questions)
+  if (addThinkingPauses && text.length > 100) {
     humanizedText = addThinkingPause(humanizedText);
   }
   
-  // 3. Add conversational fillers
-  if (addFillers) {
+  // 3. Add conversational fillers (very conservative)
+  if (addFillers && emotionalTone === 'supportive') {
     humanizedText = addConversationalFillers(humanizedText, emotionalTone);
   }
   
-  // 4. Add natural pauses
+  // 4. Add natural pauses (minimal)
   humanizedText = addNaturalPauses(humanizedText);
   
-  // 5. Add emphasis
-  if (shouldAddEmphasis) {
-    humanizedText = addEmphasis(humanizedText, emotionalTone);
-  }
-  
-  // 6. Add breath markers
-  if (addBreaths) {
-    humanizedText = addBreathMarkers(humanizedText);
-  }
+  // Skip emphasis and breath markers to keep text clean
   
   return humanizedText;
 }

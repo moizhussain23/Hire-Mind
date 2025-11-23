@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   ChevronDown,
   FileCheck,
@@ -21,11 +22,16 @@ import ShaderBackground from "../components/shader-background";
 import FluidCursor from "../components/ui/FluidCursor";
 
 const Landing = () => {
+  const navigate = useNavigate();
   const [scrollY, setScrollY] = useState(0);
   const [openFaq, setOpenFaq] = useState<number | null>(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const audioRef = useRef<HTMLAudioElement>(null);
   const [audioData, setAudioData] = useState<number[]>([35, 40, 35, 38, 35, 40, 35, 38, 35, 40, 35, 38, 35, 40, 35, 38, 35, 40, 35, 38]);
+
+  const handleTryAIInterviews = () => {
+    navigate('/interview-test');
+  };
 
   useEffect(() => {
     const savedScrollPosition = sessionStorage.getItem('landingScrollPosition');
@@ -167,12 +173,15 @@ const Landing = () => {
                 </p>
 
                 <div className="flex flex-wrap gap-4">
-                  <button className="group px-8 py-4 bg-white hover:bg-gray-100 text-purple-700 rounded-xl font-bold text-lg transition-all duration-300 shadow-2xl hover:shadow-white/20 hover:scale-105">
+                  <button 
+                    onClick={handleTryAIInterviews}
+                    className="group px-8 py-4 bg-white hover:bg-gray-100 text-purple-700 rounded-xl font-bold text-lg transition-all duration-300 shadow-2xl hover:shadow-white/20 hover:scale-105"
+                  >
                     Try AI Interviews
                     <Zap className="inline-block ml-2 w-5 h-5 group-hover:translate-x-1 transition-transform" />
                   </button>
                   <button className="px-8 py-4 bg-white/10 backdrop-blur-md hover:bg-white/20 border border-white/30 text-white rounded-xl font-bold text-lg transition-all duration-300">
-                    Book a Demo
+                    Watch a Demo
                   </button>
                 </div>
               </div>
@@ -411,7 +420,10 @@ const Landing = () => {
               seamless start to smarter hiring.
             </p>
             <div className="flex flex-wrap gap-4 justify-center">
-              <button className="group px-10 py-5 bg-white hover:bg-gray-100 text-purple-700 rounded-xl font-bold text-lg transition-all duration-300 shadow-2xl hover:scale-105">
+              <button 
+                onClick={handleTryAIInterviews}
+                className="group px-10 py-5 bg-white hover:bg-gray-100 text-purple-700 rounded-xl font-bold text-lg transition-all duration-300 shadow-2xl hover:scale-105"
+              >
                 Try AI Interviews
                 <Zap className="inline-block ml-2 w-5 h-5 group-hover:translate-x-1 transition-transform" />
               </button>

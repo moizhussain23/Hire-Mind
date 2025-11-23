@@ -35,14 +35,14 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         // Transform Clerk user to our User type
         const transformedUser: User = {
           id: clerkUser.id,
+          clerkId: clerkUser.id,
           firstName: clerkUser.firstName || '',
           lastName: clerkUser.lastName || '',
           email: clerkUser.emailAddresses[0]?.emailAddress || '',
           role: (clerkUser.unsafeMetadata?.role as string) || (clerkUser.publicMetadata?.role as string) || 'candidate',
           profileImage: clerkUser.imageUrl || '',
-          createdAt: clerkUser.createdAt?.toISOString() || new Date().toISOString(),
-          lastLoginAt: clerkUser.lastSignInAt?.toISOString() || new Date().toISOString(),
-          isActive: true
+          createdAt: clerkUser.createdAt || new Date(),
+          updatedAt: clerkUser.updatedAt || new Date()
         };
         setUser(transformedUser);
       } else {

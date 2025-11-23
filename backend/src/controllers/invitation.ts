@@ -168,6 +168,44 @@ export const acceptInvitation = async (req: AuthRequest, res: Response): Promise
     invitation.resumeUrl = resumeUrl
     invitation.candidateName = candidateName || invitation.candidateName
     invitation.acceptedAt = new Date()
+    
+    // Parse resume data immediately for interview preparation
+    if (resumeUrl) {
+      try {
+        console.log('🔍 Parsing resume for interview preparation...');
+        
+        // Import resume parser
+        const { parseResumeFromUrl } = require('./resumeController');
+        
+        // Fetch and parse resume
+        const response = await fetch(resumeUrl);
+        const arrayBuffer = await response.arrayBuffer();
+        const buffer = Buffer.from(arrayBuffer);
+        
+        const { parseResume } = require('../services/resumeParser');
+        const parsedResume = await parseResume(buffer);
+        
+        // Store parsed resume data in invitation for quick access
+        (invitation as any).resumeData = {
+          skills: parsedResume.skills || [],
+          experience: parsedResume.experience || [],
+          education: parsedResume.education || [],
+          projects: parsedResume.projects || [],
+          summary: parsedResume.summary || '',
+          workExperience: parsedResume.workExperience || [],
+          totalExperience: parsedResume.totalExperience || 0,
+          parsedAt: new Date()
+        };
+        
+        console.log('✅ Resume data parsed and stored successfully');
+        console.log(`📊 Found: ${parsedResume.skills?.length || 0} skills, ${parsedResume.experience?.length || 0} experiences`);
+        
+      } catch (resumeParseError) {
+        console.warn('⚠️ Failed to parse resume during invitation acceptance:', resumeParseError);
+        // Continue without parsed data - will parse later during interview if needed
+      }
+    }
+    
     await invitation.save()
 
     // Update interview - add to accepted candidates and update counts
@@ -425,7 +463,54 @@ export const declineInvitation = async (req: AuthRequest, res: Response): Promis
     invitation.declinedAt = new Date()
     await invitation.save()
 
-    // TODO: Notify HR about declined invitation
+    // Notify HR about declined invitation
+    try {
+      // Import email service for HR notification
+      const { sendEmail } = await import('../services/email');
+      
+      // Get interview details to find HR email and position
+      const Interview = await import('../models/Interview');
+      const interview = await Interview.Interview.findById(invitation.interviewId);
+      
+      // Use a fallback email since hrEmail doesn't exist in the interview model
+      const hrEmail = process.env.HR_EMAIL || 'hr@company.com';
+      const position = interview?.position || 'Unknown Position';
+      
+      // Send notification to HR
+      await sendEmail(
+        hrEmail,
+        `Interview Invitation Declined - ${invitation.candidateName}`,
+        `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+            <h2 style="color: #dc3545;">Interview Invitation Declined</h2>
+            <p>An interview invitation has been declined by the candidate.</p>
+            
+            <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
+              <h3>Candidate Details:</h3>
+              <p><strong>Name:</strong> ${invitation.candidateName || 'Unknown'}</p>
+              <p><strong>Email:</strong> ${invitation.candidateEmail}</p>
+              <p><strong>Position:</strong> ${position}</p>
+              <p><strong>Interview ID:</strong> ${invitation.interviewId}</p>
+              <p><strong>Declined At:</strong> ${new Date().toLocaleString()}</p>
+            </div>
+            
+            <div style="background-color: #fff3cd; padding: 15px; border-radius: 8px; border-left: 4px solid #ffc107;">
+              <h4>Reason Provided:</h4>
+              <p style="margin: 0;">${reason || 'No reason provided'}</p>
+            </div>
+            
+            <p style="margin-top: 30px; color: #6c757d; font-size: 14px;">
+              You can review this in your HR dashboard or consider reaching out to the candidate for future opportunities.
+            </p>
+          </div>
+        `
+      );
+      
+      console.log('✅ HR notification sent for declined invitation');
+    } catch (emailError) {
+      console.warn('⚠️ Failed to send HR notification email:', emailError);
+      // Don't fail the decline process if email fails
+    }
 
     res.status(200).json({
       success: true,

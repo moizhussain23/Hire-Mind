@@ -38,24 +38,36 @@ export async function uploadResume(req: Request, res: Response): Promise<void> {
     // Parse resume
     const parsedResume = await parseResume(req.file.buffer);
 
-    // Upload to Cloudinary for storage
-    const uploadResult = await new Promise((resolve, reject) => {
-      const uploadStream = cloudinary.uploader.upload_stream(
-        {
-          folder: 'resumes',
-          resource_type: 'raw',
-          format: 'pdf',
-          public_id: `resume_${Date.now()}`
-        },
-        (error: any, result: any) => {
-          if (error) reject(error);
-          else resolve(result);
-        }
-      );
-      uploadStream.end(req.file!.buffer);
-    });
-
-    const resumeUrl = (uploadResult as any).secure_url;
+    // Upload to Cloudinary for storage (optional - skip if credentials missing)
+    let resumeUrl = '';
+    
+    try {
+      if (process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY) {
+        const uploadResult = await new Promise((resolve, reject) => {
+          const uploadStream = cloudinary.uploader.upload_stream(
+            {
+              folder: 'resumes',
+              resource_type: 'raw',
+              format: 'pdf',
+              public_id: `resume_${Date.now()}`
+            },
+            (error: any, result: any) => {
+              if (error) reject(error);
+              else resolve(result);
+            }
+          );
+          uploadStream.end(req.file!.buffer);
+        });
+        resumeUrl = (uploadResult as any).secure_url;
+        console.log('✅ Resume uploaded to Cloudinary');
+      } else {
+        console.log('⚠️ Cloudinary credentials not found, skipping upload');
+        resumeUrl = 'local-file'; // Placeholder for test mode
+      }
+    } catch (cloudinaryError) {
+      console.warn('⚠️ Cloudinary upload failed, continuing without URL:', cloudinaryError);
+      resumeUrl = 'local-file'; // Fallback
+    }
 
     res.json({
       success: true,

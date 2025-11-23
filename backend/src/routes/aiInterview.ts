@@ -4,7 +4,8 @@ import {
   scoreInterviewEndpoint,
   respondToAnswer,
   validateAnswer,
-  healthCheck
+  healthCheck,
+  getComprehensiveInterviewReport
 } from '../controllers/aiInterview';
 
 const router = express.Router();
@@ -18,5 +19,8 @@ router.post('/question', generateQuestion);
 router.post('/validate-answer', validateAnswer);
 router.post('/respond', respondToAnswer);
 router.post('/score', scoreInterviewEndpoint);
+
+// Comprehensive report endpoint (used by HR dashboard)
+router.post('/comprehensive-report', getComprehensiveInterviewReport);
 
 export default router;

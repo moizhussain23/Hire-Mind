@@ -49,20 +49,22 @@ export async function generateHumanLikeSpeech(options: EnhancedTTSOptions): Prom
     processedText = addConversationalCallback(processedText, previousContext);
   }
 
-  // Step 3: Humanize text (add fillers, pauses, emphasis)
+  // Step 3: Humanize text (add fillers, pauses, emphasis) - only if enabled
   if (addHumanization) {
     processedText = humanizeText(processedText, {
       addThinkingPauses: true,
       addFillers: true,
-      addBreaths: true,
-      addEmphasis: true,
+      addBreaths: false, // Disable breath markers
+      addEmphasis: false, // Disable emphasis to keep text clean
       emotionalTone
     });
     console.log(`✨ Text humanized: "${processedText.substring(0, 80)}..."`);
+  } else {
+    console.log(`📝 Text kept original: "${processedText.substring(0, 80)}..."`);
   }
 
-  // Step 4: Add natural pauses
-  if (shouldAddPauses) {
+  // Step 4: Add natural pauses - only if enabled and humanization is on
+  if (shouldAddPauses && addHumanization) {
     processedText = addNaturalPauses(processedText);
   }
 
