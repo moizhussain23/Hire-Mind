@@ -1547,6 +1547,17 @@ vector<int> twoSum(vector<int>& nums, int target) {
   };
 
   // Complete interview
+  // Handle end interview button click with confirmation
+  const handleEndInterview = () => {
+    const confirmed = window.confirm(
+      'Are you sure you want to end this interview? This action cannot be undone.'
+    );
+    
+    if (confirmed) {
+      completeInterview();
+    }
+  };
+
   const completeInterview = () => {
     if (mediaStream) {
       mediaStream.getTracks().forEach(track => track.stop());
@@ -1556,14 +1567,18 @@ vector<int> twoSum(vector<int>& nums, int target) {
     }
     if (synthRef.current) synthRef.current.cancel();
 
-    const result: InterviewResult = {
-      interviewId,
-      duration: Date.now() - startTime,
-      transcript: messages,
-      codeSubmissions: [{ code, language, timestamp: Date.now() }]
-    };
-
-    onComplete(result);
+    // Stop any ongoing processes
+    setIsListening(false);
+    setIsAISpeaking(false);
+    setIsProcessing(false);
+    
+    // Show completion screen
+    setShowCompletionScreen(true);
+    
+    // Redirect to dashboard after showing completion message
+    setTimeout(() => {
+      window.location.href = '/dashboard';
+    }, 3000);
   };
 
   // Format time
@@ -2740,6 +2755,32 @@ void ${functionName}() {
               >
                 Run Again
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Interview Completion Screen */}
+      {showCompletionScreen && (
+        <div className="fixed inset-0 bg-gradient-to-br from-blue-900 to-purple-900 z-50 flex items-center justify-center">
+          <div className="bg-white rounded-2xl p-8 text-center max-w-md mx-4 shadow-2xl">
+            <div className="w-20 h-20 bg-green-500 rounded-full flex items-center justify-center mx-auto mb-6">
+              <svg className="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+            </div>
+            
+            <h2 className="text-2xl font-bold text-gray-900 mb-4">
+              Interview Completed!
+            </h2>
+            
+            <p className="text-gray-600 mb-6">
+              Thank you for completing your interview. Your results will be shown in the dashboard after analysis.
+            </p>
+            
+            <div className="flex items-center justify-center space-x-2 text-blue-600">
+              <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-600"></div>
+              <span className="text-sm">Redirecting to dashboard...</span>
             </div>
           </div>
         </div>

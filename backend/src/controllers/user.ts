@@ -101,18 +101,33 @@ export const getDashboardStats = async (req: AuthRequest, res: Response): Promis
       expiresAt: { $gt: new Date() }
     })
 
-    // Get completed interview sessions with scores
+    // Get completed interview sessions
     const completedSessions = await InterviewSession.find({
       candidateEmail: user.email,
-      status: 'completed',
-      finalScore: { $exists: true, $ne: null }
-    }).select('finalScore')
+      status: 'completed'
+    })
 
-    // Calculate average score
+    // Get corresponding interviews with scores
+    const interviewsWithScores = await Promise.all(
+      completedSessions.map(async (session) => {
+        const interview = await Interview.findById(session.interviewId)
+        return {
+          session,
+          interview,
+          score: interview?.evaluation?.overallScore || 0
+        }
+      })
+    )
+
+    // Calculate average score from interviews that have scores
     let averageScore = 0
-    if (completedSessions.length > 0) {
-      const totalScore = completedSessions.reduce((sum, session) => sum + (session.finalScore || 0), 0)
-      averageScore = Math.round(totalScore / completedSessions.length)
+    const scoresArray = interviewsWithScores
+      .filter(item => item.score > 0)
+      .map(item => item.score)
+    
+    if (scoresArray.length > 0) {
+      const totalScore = scoresArray.reduce((sum, score) => sum + score, 0)
+      averageScore = Math.round(totalScore / scoresArray.length)
     }
 
     // Get next upcoming interview
@@ -322,7 +337,8 @@ export const getInterviewResults = async (req: AuthRequest, res: Response): Prom
           selectedTimeSlot: { $lte: session.updatedAt }
         }).sort({ selectedTimeSlot: -1 })
         
-        const interview = invitation ? await Interview.findById(invitation.interviewId) : null
+        const interview = invitation ? await Interview.findById(invitation.interviewId) : 
+                         await Interview.findById(session.interviewId)
         const hrUser = interview ? await User.findOne({ clerkId: interview.hrId }) : null
 
         const sessionDate = session.updatedAt || session.createdAt
@@ -338,7 +354,7 @@ export const getInterviewResults = async (req: AuthRequest, res: Response): Prom
             hour12: true 
           }),
           status: 'completed',
-          score: session.finalScore || 0
+          score: interview?.evaluation?.overallScore || 0
         }
       })
     )

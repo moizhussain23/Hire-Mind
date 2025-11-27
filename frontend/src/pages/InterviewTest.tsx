@@ -258,7 +258,7 @@ export default function InterviewTest() {
                     value={candidateName}
                     onChange={(e) => setCandidateName(e.target.value)}
                     className="w-full px-4 py-3 border-2 border-blue-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
-                    placeholder="e.g., John Doe"
+                    placeholder=""
                     required
                   />
                 </div>
