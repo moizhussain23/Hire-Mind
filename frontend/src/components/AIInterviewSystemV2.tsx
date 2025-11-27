@@ -61,6 +61,11 @@ export default function AIInterviewSystemV2({
   const [showTestPage, setShowTestPage] = useState(true);
   const [testMediaStream, setTestMediaStream] = useState<MediaStream | null>(null);
   
+  // Loading and countdown state
+  const [isPreparingInterview, setIsPreparingInterview] = useState(false);
+  const [isCountingDown, setIsCountingDown] = useState(false);
+  const [countdownValue, setCountdownValue] = useState(3);
+  
   // Interview state
   const [isStarted, setIsStarted] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -72,9 +77,17 @@ export default function AIInterviewSystemV2({
   const [elapsedTime, setElapsedTime] = useState(0);
   const [questionCount, setQuestionCount] = useState(0);
   
-  // Interview phase state
-  const [interviewPhase, setInterviewPhase] = useState<'behavioral' | 'technical'>('behavioral');
+  // Interview phase state - Start in technical mode for testing if needed
+  const [interviewPhase, setInterviewPhase] = useState<'behavioral' | 'technical'>(
+    process.env.NODE_ENV === 'development' && window.location.search.includes('technical=true') 
+      ? 'technical' 
+      : 'behavioral'
+  );
   const [behavioralQuestionsAsked, setBehavioralQuestionsAsked] = useState(0);
+  const [askedQuestions, setAskedQuestions] = useState<string[]>([]);
+  const [askedCodingQuestionIds, setAskedCodingQuestionIds] = useState<string[]>([]);
+  const [resumeData, setResumeData] = useState<any>(null);
+  const [currentCodingQuestion, setCurrentCodingQuestion] = useState<any>(null);
   
   // Time management state
   const [timeRemaining, setTimeRemaining] = useState<number>(duration * 60 * 1000); // Convert to milliseconds
@@ -96,8 +109,11 @@ export default function AIInterviewSystemV2({
 
   // Code editor state
   const [code, setCode] = useState('# Write your solution here\n\ndef solution():\n    pass\n');
-  const [language, setLanguage] = useState('python');
+  const [language, setLanguage] = useState<'javascript' | 'python' | 'java' | 'cpp'>('javascript');
   const [isRunning, setIsRunning] = useState(false);
+  const [testResults, setTestResults] = useState<any[]>([]);
+  const [showTestResults, setShowTestResults] = useState(false);
+  const [executionLogs, setExecutionLogs] = useState<string[]>([]);
 
   // Media state
   const [isMicEnabled, setIsMicEnabled] = useState(true);
@@ -130,6 +146,52 @@ export default function AIInterviewSystemV2({
       synthRef.current = window.speechSynthesis;
     }
   }, []);
+
+  // Parse resume data on mount
+  useEffect(() => {
+    const parseResumeData = async () => {
+      if (resumeUrl) {
+        try {
+          console.log('📄 Parsing resume data from:', resumeUrl);
+          
+          // Get auth token from localStorage or sessionStorage
+          const token = localStorage.getItem('token') || sessionStorage.getItem('token') || 
+                       localStorage.getItem('authToken') || sessionStorage.getItem('authToken');
+          
+          const headers: HeadersInit = {
+            'Content-Type': 'application/json'
+          };
+          
+          // Add Authorization header if token exists
+          if (token) {
+            headers['Authorization'] = `Bearer ${token}`;
+          }
+          
+          const response = await fetch('/api/resume/parse', {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({ resumeUrl })
+          });
+          
+          if (response.ok) {
+            const data = await response.json();
+            setResumeData(data.resumeData);
+            console.log('✅ Resume data parsed:', data.resumeData);
+          } else if (response.status === 401) {
+            console.warn('⚠️ Resume parsing requires authentication - continuing without resume data');
+            // Continue without resume data - interview can still work
+          } else {
+            console.warn('⚠️ Resume parsing failed - continuing without resume data');
+          }
+        } catch (error) {
+          console.warn('⚠️ Resume parsing error - continuing without resume data:', error);
+          // Don't break the interview if resume parsing fails
+        }
+      }
+    };
+
+    parseResumeData();
+  }, [resumeUrl]);
 
   // Auto-scroll messages
   useEffect(() => {
@@ -331,6 +393,49 @@ export default function AIInterviewSystemV2({
     return `${minutes}:${seconds.toString().padStart(2, '0')}`;
   };
 
+  // Prepare interview (shows loading screen)
+  const prepareInterview = (stream: MediaStream) => {
+    console.log('🔄 Preparing interview...');
+    setIsPreparingInterview(true);
+    
+    // Store the stream and prepare
+    setTestMediaStream(stream);
+    
+    // Simulate preparation time
+    setTimeout(() => {
+      setIsPreparingInterview(false);
+      startCountdown(stream);
+    }, 2000);
+  };
+
+  // Start countdown (3, 2, 1)
+  const startCountdown = (stream: MediaStream) => {
+    console.log('⏱️ Starting countdown...');
+    setIsCountingDown(true);
+    let count = 3;
+    setCountdownValue(count);
+
+    const timer = setInterval(() => {
+      count--;
+      setCountdownValue(count);
+
+      if (count === 0) {
+        clearInterval(timer);
+        setIsCountingDown(false);
+        startInterviewDirectly(stream);
+      }
+    }, 1000);
+  };
+
+  // Start interview directly (original working logic)
+  const startInterviewDirectly = async (stream: MediaStream) => {
+    console.log('🎬 Starting interview with original working logic...');
+    setIsStarted(true);
+    setStartTime(Date.now());
+    await initializeMedia(stream);
+    setTimeout(() => generateAIQuestion(), 1500);
+  };
+
   // AI speaks
   const speakText = async (text: string) => {
     return new Promise<void>((resolve) => {
@@ -366,31 +471,61 @@ export default function AIInterviewSystemV2({
 
   // Generate AI question using backend API
   const generateAIQuestion = async () => {
+    // Prevent duplicate calls
+    if (isProcessing) {
+      console.log('🚫 Already generating question, skipping duplicate call');
+      return;
+    }
+
     setIsProcessing(true);
 
     try {
-      console.log('≡ƒñû Calling backend API for AI-generated question...');
+      console.log('🤖 Generating AI question...', { phase: interviewPhase, count: behavioralQuestionsAsked });
+
+      // Check for technical phase and load coding question
+      if (interviewPhase === 'technical') {
+        console.log('🔧 Technical phase detected, loading coding question...', { 
+          phase: interviewPhase, 
+          skillCategory, 
+          hasCodingRound 
+        });
+        // Fetch coding question from question bank
+        await generateCodingQuestion();
+        return;
+      }
       
-      // Collect previous answers for context
+      // Behavioral question generation with resume data and duplicate prevention
       const previousAnswers = messages
         .filter(m => m.sender === 'candidate')
         .map(m => m.text);
 
-      // Call backend API to generate question
+      // Get auth token for API calls
+      const token = localStorage.getItem('token') || sessionStorage.getItem('token') || 
+                   localStorage.getItem('authToken') || sessionStorage.getItem('authToken');
+      
+      const headers: HeadersInit = {
+        'Content-Type': 'application/json'
+      };
+      
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
+      // Call backend API to generate behavioral question
       const response = await fetch('/api/ai-interview/question', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
+        headers,
         body: JSON.stringify({
           candidateName,
           position,
           skillCategory,
           experienceLevel,
-          resumeData: null, // TODO: Add resume data when available
+          resumeData: resumeData, // Include parsed resume data
           previousAnswers,
-          questionNumber: questionCount,
-          interviewPhase
+          askedQuestions, // Prevent duplicate questions
+          questionNumber: behavioralQuestionsAsked,
+          interviewPhase,
+          maxBehavioralQuestions: 3 // Ensure exactly 3 behavioral questions
         })
       });
 
@@ -406,7 +541,17 @@ export default function AIInterviewSystemV2({
 
       const { questionText, audioBase64 } = data.data;
 
-      console.log('Γ£à Received AI-generated question:', questionText);
+      // Check for duplicate questions
+      if (askedQuestions.includes(questionText)) {
+        console.warn('⚠️ Duplicate question detected, regenerating...');
+        setTimeout(() => generateAIQuestion(), 1000);
+        return;
+      }
+
+      console.log('✅ Generated behavioral question:', questionText);
+
+      // Add to asked questions list
+      setAskedQuestions(prev => [...prev, questionText]);
 
       const aiMessage: Message = {
         id: Date.now().toString(),
@@ -419,41 +564,52 @@ export default function AIInterviewSystemV2({
       setMessages(prev => [...prev, aiMessage]);
       setCurrentQuestion(questionText);
 
-      // Play audio from backend (base64 encoded)
-      // Note: playAudioFromBase64 will automatically start listening when done
+      // Play audio from backend
       if (audioBase64) {
         await playAudioFromBase64(audioBase64);
       } else {
-        await speakText(questionText);
-        // Only start listening if using fallback TTS
-        setTimeout(() => startListening(), 500);
+        await speakWithBackendAudio(questionText);
       }
 
-      // Update question counts
-      if (interviewPhase === 'behavioral') {
-        setBehavioralQuestionsAsked(prev => prev + 1);
-        
-        // Switch to technical phase after 3 behavioral questions
-        if (behavioralQuestionsAsked >= 2 && skillCategory === 'technical') {
+      // Update behavioral question count
+      setBehavioralQuestionsAsked(prev => prev + 1);
+      
+      // Switch to technical phase after exactly 3 behavioral questions
+      if (behavioralQuestionsAsked >= 2 && skillCategory === 'technical') {
+        setTimeout(() => {
+          console.log('🔄 Switching to technical phase...');
+          setInterviewPhase('technical');
+          const transitionMsg: Message = {
+            id: Date.now().toString(),
+            sender: 'ai',
+            text: `Excellent! Now let's move to the technical assessment. I have a coding challenge for you to solve.`,
+            timestamp: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+            isVoice: true
+          };
+          setMessages(prev => [...prev, transitionMsg]);
+          speakWithBackendAudio(transitionMsg.text);
+          
+          // Automatically load coding question after transition
           setTimeout(() => {
-            setInterviewPhase('technical');
-            const transitionMsg: Message = {
-              id: Date.now().toString(),
-              sender: 'ai',
-              text: `Perfect! Now let's move to the technical part of the interview. I'll give you a coding problem to solve.`,
-              timestamp: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-              isVoice: true
-            };
-            setMessages(prev => [...prev, transitionMsg]);
-            speakWithBackendAudio(transitionMsg.text);
-          }, 3000);
-        }
+            generateCodingQuestion();
+          }, 2000);
+        }, 3000);
       }
 
     } catch (err) {
-      console.error('Γ¥î Error generating question:', err);
-      // Fallback to basic question if API fails
-      const fallbackQuestion = `Can you tell me more about your experience with ${position}?`;
+      console.error('❌ Error generating question:', err);
+      // Fallback behavioral question
+      const fallbackQuestions = [
+        `Tell me about your experience in ${position} roles and what attracted you to this field.`,
+        `Can you describe a challenging project you worked on and how you overcame the difficulties?`,
+        `What motivates you in your work, and how do you stay updated with industry trends?`
+      ];
+      
+      const availableFallbacks = fallbackQuestions.filter(q => !askedQuestions.includes(q));
+      const fallbackQuestion = availableFallbacks[0] || `Can you tell me more about your experience with ${position}?`;
+      
+      setAskedQuestions(prev => [...prev, fallbackQuestion]);
+      
       const aiMessage: Message = {
         id: Date.now().toString(),
         sender: 'ai',
@@ -464,7 +620,6 @@ export default function AIInterviewSystemV2({
       setMessages(prev => [...prev, aiMessage]);
       setCurrentQuestion(fallbackQuestion);
       await speakWithBackendAudio(fallbackQuestion);
-      setTimeout(() => startListening(), 500);
     } finally {
       setIsProcessing(false);
     }
@@ -527,12 +682,22 @@ export default function AIInterviewSystemV2({
     try {
       console.log('≡ƒÄñ Generating audio from backend for:', text.substring(0, 50));
       
+      // Get auth token for TTS API
+      const token = localStorage.getItem('token') || sessionStorage.getItem('token') || 
+                   localStorage.getItem('authToken') || sessionStorage.getItem('authToken');
+      
+      const headers: HeadersInit = {
+        'Content-Type': 'application/json'
+      };
+      
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
       // Call backend to generate audio
       const response = await fetch('/api/tts/generate', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
+        headers,
         body: JSON.stringify({ text })
       });
 
@@ -838,13 +1003,520 @@ export default function AIInterviewSystemV2({
     }
   };
 
-  // Run code
-  const handleRunCode = () => {
+  // Initialize question bank  
+  const initializeQuestionBank = async () => {
+    try {
+      addExecutionLog('🔧 Initializing question bank...');
+      
+      // Get auth token
+      const token = localStorage.getItem('token') || sessionStorage.getItem('token') || 
+                   localStorage.getItem('authToken') || sessionStorage.getItem('authToken');
+      
+      const headers: HeadersInit = {
+        'Content-Type': 'application/json'
+      };
+      
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      
+      const response = await fetch('/api/coding/init', {
+        method: 'POST',
+        headers
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        addExecutionLog(`✅ Question bank initialized: ${data.totalQuestions} questions`);
+        return true;
+      } else {
+        addExecutionLog(`❌ Failed to initialize question bank: ${response.status}`);
+        return false;
+      }
+    } catch (error) {
+      addExecutionLog(`❌ Error initializing question bank: ${error.message}`);
+      return false;
+    }
+  };
+
+  // Generate coding question from question bank
+  const generateCodingQuestion = async () => {
+    try {
+      addExecutionLog('🧩 Loading coding problem from question bank...');
+      
+      // Get auth token
+      const token = localStorage.getItem('token') || sessionStorage.getItem('token') || 
+                   localStorage.getItem('authToken') || sessionStorage.getItem('authToken');
+      
+      const headers: HeadersInit = {
+        'Content-Type': 'application/json'
+      };
+      
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      
+      const response = await fetch('/api/coding/question', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          experienceLevel: experienceLevel,
+          domain: ['general'],
+          difficulty: experienceLevel === 'fresher' ? 'easy' : experienceLevel === 'senior' ? 'hard' : 'medium',
+          timeLimit: 30,
+          excludeQuestionIds: askedCodingQuestionIds // Exclude previously asked coding questions
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`API responded with status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      if (data.success && data.question) {
+        const questionData = data.question;
+        
+        const formattedProblem = {
+          id: questionData.id,
+          title: questionData.title,
+          difficulty: questionData.difficulty,
+          description: questionData.description,
+          examples: questionData.examples || [],
+          constraints: questionData.constraints || [],
+          codeTemplate: questionData.codeTemplate || {},
+          functionName: extractFunctionName(questionData.codeTemplate?.javascript || ''),
+          testCases: questionData.examples?.map((ex: any, idx: number) => {
+            // Parse expected output if it's a string representation of array/object
+            let expectedOutput = ex.output;
+            if (typeof expectedOutput === 'string') {
+              try {
+                expectedOutput = JSON.parse(expectedOutput);
+                addExecutionLog(`📝 Parsed expected output: "${ex.output}" -> ${JSON.stringify(expectedOutput)}`);
+              } catch {
+                // Keep as string if can't parse
+                addExecutionLog(`📝 Keeping expected output as string: "${ex.output}"`);
+              }
+            }
+            
+            return {
+              input: ex.input,
+              expectedOutput: expectedOutput,
+              description: ex.explanation || `Test case ${idx + 1}`
+            };
+          }) || [],
+          hints: questionData.hints || [],
+          estimatedTime: questionData.estimatedTime || 15
+        };
+        
+        setCurrentCodingQuestion(formattedProblem);
+        
+        // Track this coding question to avoid repeats
+        setAskedCodingQuestionIds(prev => [...prev, questionData.id]);
+        addExecutionLog(`📝 Tracking question ID: ${questionData.id} to avoid repeats`);
+        
+        // Set initial code template
+        const template = questionData.codeTemplate?.[language] || 
+                        getCodeTemplate(language, formattedProblem.functionName);
+        setCode(template);
+        
+        addExecutionLog(`✅ Problem loaded: ${questionData.title} (${questionData.difficulty})`);
+        addExecutionLog(`📊 Available templates: ${Object.keys(questionData.codeTemplate || {}).join(', ')}`);
+        addExecutionLog(`🚫 Excluded questions: ${askedCodingQuestionIds.length} previous questions`);
+        
+        const questionMessage: Message = {
+          id: Date.now().toString(),
+          sender: 'ai',
+          text: `Here's your coding challenge: "${questionData.title}". Please read the problem statement on the right and implement your solution. You can run and test your code anytime.`,
+          timestamp: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+          isVoice: true
+        };
+        
+        setMessages(prev => [...prev, questionMessage]);
+        await speakWithBackendAudio(questionMessage.text);
+      } else {
+        throw new Error('Invalid question data received');
+      }
+    } catch (error) {
+      addExecutionLog(`❌ Error loading problem: ${error.message}`);
+      addExecutionLog('🔄 Trying to initialize question bank first...');
+      
+      const initialized = await initializeQuestionBank();
+      if (initialized) {
+        addExecutionLog('🔄 Retrying question load...');
+        // Retry once more
+        try {
+          const retryResponse = await fetch('/api/coding/question', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              experienceLevel: experienceLevel,
+              domain: ['general'],
+              difficulty: experienceLevel === 'fresher' ? 'easy' : experienceLevel === 'senior' ? 'hard' : 'medium',
+              timeLimit: 30,
+              excludeQuestionIds: askedCodingQuestionIds // Exclude previously asked coding questions
+            })
+          });
+
+          if (retryResponse.ok) {
+            const retryData = await retryResponse.json();
+            if (retryData.success && retryData.question) {
+              const questionData = retryData.question;
+              
+              const formattedProblem = {
+                id: questionData.id,
+                title: questionData.title,
+                difficulty: questionData.difficulty,
+                description: questionData.description,
+                examples: questionData.examples || [],
+                constraints: questionData.constraints || [],
+                codeTemplate: questionData.codeTemplate || {},
+                functionName: extractFunctionName(questionData.codeTemplate?.javascript || ''),
+                testCases: questionData.examples?.map((ex: any, idx: number) => {
+                  let expectedOutput = ex.output;
+                  if (typeof expectedOutput === 'string') {
+                    try {
+                      expectedOutput = JSON.parse(expectedOutput);
+                      addExecutionLog(`📝 Parsed expected output: "${ex.output}" -> ${JSON.stringify(expectedOutput)}`);
+                    } catch {
+                      addExecutionLog(`📝 Keeping expected output as string: "${ex.output}"`);
+                    }
+                  }
+                  
+                  return {
+                    input: ex.input,
+                    expectedOutput: expectedOutput,
+                    description: ex.explanation || `Test case ${idx + 1}`
+                  };
+                }) || [],
+                hints: questionData.hints || [],
+                estimatedTime: questionData.estimatedTime || 15
+              };
+              
+              setCurrentCodingQuestion(formattedProblem);
+              
+              // Track this coding question to avoid repeats
+              setAskedCodingQuestionIds(prev => [...prev, questionData.id]);
+              addExecutionLog(`📝 Tracking question ID on retry: ${questionData.id} to avoid repeats`);
+              
+              const template = questionData.codeTemplate?.[language] || 
+                              getCodeTemplate(language, formattedProblem.functionName);
+              setCode(template);
+              
+              addExecutionLog(`✅ Problem loaded on retry: ${questionData.title} (${questionData.difficulty})`);
+              
+              const questionMessage: Message = {
+                id: Date.now().toString(),
+                sender: 'ai',
+                text: `Here's your coding challenge: "${questionData.title}". Please read the problem statement on the right and implement your solution. You can run and test your code anytime.`,
+                timestamp: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+                isVoice: true
+              };
+              
+              setMessages(prev => [...prev, questionMessage]);
+              await speakWithBackendAudio(questionMessage.text);
+              return; // Success, no need for fallback
+            }
+          }
+        } catch (retryError) {
+          addExecutionLog(`❌ Retry also failed: ${retryError.message}`);
+        }
+      }
+      
+      // Fallback coding question (with unique ID to avoid conflicts)
+      const fallbackQuestionId = `fallback-${Date.now()}`;
+      const fallbackQuestion = {
+        id: fallbackQuestionId,
+        title: "Two Sum",
+        description: "Given an array of integers nums and an integer target, return indices of the two numbers such that they add up to target.",
+        examples: [
+          { input: "nums = [2,7,11,15], target = 9", output: "[0,1]" },
+          { input: "nums = [3,2,4], target = 6", output: "[1,2]" }
+        ],
+        testCases: [
+          { 
+            input: "nums = [2,7,11,15], target = 9", 
+            expectedOutput: [0,1],
+            description: "Test case 1"
+          },
+          { 
+            input: "nums = [3,2,4], target = 6", 
+            expectedOutput: [1,2],
+            description: "Test case 2"
+          }
+        ],
+        functionName: 'twoSum',
+        codeTemplate: {
+          javascript: `function twoSum(nums, target) {
+    // Your solution here
+    
+}`,
+          python: `def two_sum(nums, target):
+    # Your solution here
+    pass`,
+          java: `public class Solution {
+    public int[] twoSum(int[] nums, int target) {
+        // Your solution here
+        
+    }
+}`,
+          cpp: `#include <vector>
+using namespace std;
+
+vector<int> twoSum(vector<int>& nums, int target) {
+    // Your solution here
+    
+}`
+        }
+      };
+      
+      setCurrentCodingQuestion(fallbackQuestion);
+      setCode(fallbackQuestion.codeTemplate[language]);
+      
+      // Track fallback question too
+      setAskedCodingQuestionIds(prev => [...prev, fallbackQuestionId]);
+      addExecutionLog('✅ Using fallback Two Sum problem');
+      addExecutionLog(`📝 Tracking fallback question ID: ${fallbackQuestionId}`);
+    }
+  };
+
+  // Universal input parser (from CodingChallengeTest.tsx)
+  const parseUniversalInput = (input: string, testNumber: number): any[] => {
+    try {
+      // Special handling for class-based problems
+      if (input.includes('LRUCache') || input.includes('lRUCache') || 
+          input.includes('Singleton') || input.includes('new ') || 
+          input.includes('class ') || input.includes('.getInstance') ||
+          input.includes('Design')) {
+        addExecutionLog(`📝 Test ${testNumber} - Class-based problem sequence: ${input.substring(0, 100)}...`);
+        return [input];
+      }
+      
+      // Two Sum: "nums = [2,7,11,15], target = 9"
+      if (input.includes('nums =') && input.includes('target =')) {
+        const numsMatch = input.match(/nums\s*=\s*(\[[^\]]+\])/);
+        const targetMatch = input.match(/target\s*=\s*(-?\d+)/);
+        if (numsMatch && targetMatch) {
+          const nums = JSON.parse(numsMatch[1]);
+          const target = parseInt(targetMatch[1]);
+          addExecutionLog(`📝 Test ${testNumber} - Two Sum: nums=${JSON.stringify(nums)}, target=${target}`);
+          return [nums, target];
+        }
+      }
+      
+      // Palindrome: s = "racecar"
+      if (input.includes('s =')) {
+        const stringMatch = input.match(/s\s*=\s*"([^"]*)"/);
+        if (stringMatch) {
+          addExecutionLog(`📝 Test ${testNumber} - String: s="${stringMatch[1]}"`);
+          return [stringMatch[1]];
+        }
+      }
+      
+      // Array manipulation: arr = [1,2,3], val = 2
+      if (input.includes('arr =') || input.includes('array =')) {
+        const arrMatch = input.match(/(arr|array)\s*=\s*(\[[^\]]+\])/);
+        const valMatch = input.match(/val(?:ue)?\s*=\s*(-?\d+)/);
+        if (arrMatch) {
+          const arr = JSON.parse(arrMatch[2]);
+          const val = valMatch ? parseInt(valMatch[1]) : undefined;
+          if (val !== undefined) {
+            addExecutionLog(`📝 Test ${testNumber} - Array + Value: arr=${JSON.stringify(arr)}, val=${val}`);
+            return [arr, val];
+          } else {
+            addExecutionLog(`📝 Test ${testNumber} - Array Only: arr=${JSON.stringify(arr)}`);
+            return [arr];
+          }
+        }
+      }
+      
+      // Direct array: [1,2,3,4,5]
+      if (input.startsWith('[') && input.endsWith(']')) {
+        const arr = JSON.parse(input);
+        addExecutionLog(`📝 Test ${testNumber} - Direct Array: ${JSON.stringify(arr)}`);
+        return [arr];
+      }
+      
+      // Single number: 42
+      if (/^-?\d+$/.test(input.trim())) {
+        const num = parseInt(input.trim());
+        addExecutionLog(`📝 Test ${testNumber} - Single Number: ${num}`);
+        return [num];
+      }
+      
+      // Fallback: Try JSON parse
+      try {
+        const parsed = JSON.parse(input);
+        addExecutionLog(`📝 Test ${testNumber} - JSON Parsed: ${JSON.stringify(parsed)}`);
+        return Array.isArray(parsed) ? parsed : [parsed];
+      } catch {
+        // Final fallback: treat as single string parameter
+        addExecutionLog(`📝 Test ${testNumber} - Fallback String: "${input}"`);
+        return [input];
+      }
+      
+    } catch (e) {
+      addExecutionLog(`❌ Test ${testNumber} - Parse Error: ${e.message}, using raw input`);
+      return [input];
+    }
+  };
+
+  // Run code with test cases
+  const handleRunCode = async () => {
+    if (!currentCodingQuestion) {
+      addExecutionLog('❌ No coding question loaded');
+      return;
+    }
+
     setIsRunning(true);
-    setTimeout(() => {
+    addExecutionLog(`🚀 Executing ${language} code...`);
+    
+    try {
+      // Determine the correct function name for different problem types
+      let actualFunctionName = currentCodingQuestion.functionName || 'solution';
+      
+      // Comprehensive function name detection
+      if (code.includes('class LRUCache') || code.includes('LRUCache')) {
+        actualFunctionName = 'LRUCache';
+        addExecutionLog(`🎯 Detected LRU Cache class, using function name: ${actualFunctionName}`);
+      } else if (code.includes('function ')) {
+        // Extract function name from code
+        const functionMatch = code.match(/function\s+(\w+)/);
+        if (functionMatch) {
+          actualFunctionName = functionMatch[1];
+          addExecutionLog(`🎯 Detected function: ${actualFunctionName}`);
+        }
+      } else if (code.includes('const ') && code.includes(' = ')) {
+        // Extract arrow function name: const twoSum = (nums, target) => {...}
+        const arrowMatch = code.match(/const\s+(\w+)\s*=/);
+        if (arrowMatch) {
+          actualFunctionName = arrowMatch[1];
+          addExecutionLog(`🎯 Detected arrow function: ${actualFunctionName}`);
+        }
+      }
+
+      // Get auth token
+      const token = localStorage.getItem('token') || sessionStorage.getItem('token') || 
+                   localStorage.getItem('authToken') || sessionStorage.getItem('authToken');
+      
+      const headers: HeadersInit = {
+        'Content-Type': 'application/json'
+      };
+      
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
+      const response = await fetch('/api/coding/execute', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          code: code.trim(),
+          language,
+          questionId: currentCodingQuestion.id || 'fallback',
+          functionName: actualFunctionName,
+          testCases: currentCodingQuestion.testCases.map((tc, idx) => {
+            // Parse input if it's a string representation
+            let parsedInput = tc.input;
+            if (typeof tc.input === 'string') {
+              parsedInput = parseUniversalInput(tc.input, idx + 1);
+            }
+            
+            // Ensure expectedOutput is in correct format
+            let expectedOutput = tc.expectedOutput;
+            if (typeof expectedOutput === 'string' && (expectedOutput.startsWith('[') || expectedOutput.startsWith('{'))) {
+              try {
+                expectedOutput = JSON.parse(expectedOutput);
+                addExecutionLog(`📝 Test ${idx + 1} - Parsed expected: "${tc.expectedOutput}" -> ${JSON.stringify(expectedOutput)}`);
+              } catch {
+                addExecutionLog(`📝 Test ${idx + 1} - Keeping expected as string: "${tc.expectedOutput}"`);
+              }
+            }
+            
+            addExecutionLog(`📝 Test ${idx + 1} final format: input=${JSON.stringify(parsedInput)}, expected=${JSON.stringify(expectedOutput)}`);
+            
+            return {
+              input: Array.isArray(parsedInput) ? parsedInput : [parsedInput],
+              expectedOutput: expectedOutput,
+              description: tc.description
+            };
+          })
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`API responded with status: ${response.status}`);
+      }
+
+      const result = await response.json();
+      
+      if (result.success) {
+        const { output, testResults, executionTime, memoryUsage } = result.data;
+        
+        addExecutionLog(`✅ Code executed successfully! ${testResults?.length || 0} test cases processed`);
+        
+        // Set test results and show popup from bottom
+        setTestResults(testResults || []);
+        setShowTestResults(true);
+
+        // Add execution result to messages
+        const passedTests = testResults?.filter((t: any) => t.passed).length || 0;
+        const totalTests = testResults?.length || 0;
+        const allTestsPassed = passedTests === totalTests && totalTests > 0;
+        
+        const resultMessage: Message = {
+          id: Date.now().toString(),
+          sender: 'ai',
+          text: `Great! Your code passed ${passedTests} out of ${totalTests} test cases. ${allTestsPassed ? 'Excellent work! 🎉' : 'Keep refining your solution.'}`,
+          timestamp: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+          isVoice: false
+        };
+        
+        setMessages(prev => [...prev, resultMessage]);
+
+        // Auto-advance to next question if all tests pass
+        if (allTestsPassed) {
+          addExecutionLog('🎉 All test cases passed! Moving to next question...');
+          
+          // Show success message with auto-advance notification
+          setTimeout(() => {
+            const successMessage: Message = {
+              id: Date.now().toString(),
+              sender: 'ai',
+              text: `Perfect solution! All ${totalTests} test cases passed. Moving to the next question...`,
+              timestamp: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+              isVoice: true
+            };
+            setMessages(prev => [...prev, successMessage]);
+            
+            // Speak the success message and move to next question
+            speakWithBackendAudio(successMessage.text);
+            
+            // Auto-close test results popup
+            setShowTestResults(false);
+            
+            // Move to next question after a brief celebration
+            setTimeout(() => {
+              setQuestionCount(prev => prev + 1);
+              
+              if (questionCount + 1 < 5) {
+                generateAIQuestion();
+              } else {
+                completeInterview();
+              }
+            }, 3000);
+            
+          }, 2000);
+        }
+
+      } else {
+        throw new Error(result.error || 'Code execution failed');
+      }
+
+    } catch (error) {
+      addExecutionLog(`❌ Error executing code: ${error.message}`);
+    } finally {
       setIsRunning(false);
-      alert('Code executed! (In production, this would run on backend)');
-    }, 1500);
+    }
   };
 
   // Start interview with time validation
@@ -947,6 +1619,88 @@ export default function AIInterviewSystemV2({
     return () => clearInterval(interval);
   }, [isStarted, startTime, isTimeWarningShown]);
 
+  // Helper function to get authenticated headers
+  const getAuthHeaders = (): HeadersInit => {
+    const token = localStorage.getItem('token') || sessionStorage.getItem('token') || 
+                 localStorage.getItem('authToken') || sessionStorage.getItem('authToken');
+    
+    const headers: HeadersInit = {
+      'Content-Type': 'application/json'
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    
+    return headers;
+  };
+
+  // Add execution log function
+  const addExecutionLog = (message: string) => {
+    console.log(message);
+    setExecutionLogs(prev => [...prev, `${new Date().toLocaleTimeString()}: ${message}`]);
+  };
+
+  // Extract function name from code template
+  const extractFunctionName = (codeTemplate: string) => {
+    if (!codeTemplate) return 'solution';
+    const match = codeTemplate.match(/function\s+([a-zA-Z_][a-zA-Z0-9_]*)/);
+    return match ? match[1] : 'solution';
+  };
+
+  // Get code template based on language
+  const getCodeTemplate = (lang: string, functionName: string) => {
+    switch (lang) {
+      case 'javascript':
+        return `function ${functionName}() {
+    // Your solution here
+    
+}`;
+      case 'python':
+        return `def ${functionName.replace(/([A-Z])/g, '_$1').toLowerCase()}():
+    # Your solution here
+    pass`;
+      case 'java':
+        return `public class Solution {
+    public void ${functionName}() {
+        // Your solution here
+        
+    }
+}`;
+      case 'cpp':
+        return `#include <iostream>
+using namespace std;
+
+void ${functionName}() {
+    // Your solution here
+    
+}`;
+      default:
+        return `function ${functionName}() {
+    // Your solution here
+    
+}`;
+    }
+  };
+
+  // Handle language change
+  const handleLanguageChange = (newLanguage: 'javascript' | 'python' | 'java' | 'cpp') => {
+    addExecutionLog(`🔄 Switching language from ${language} to ${newLanguage}`);
+    setLanguage(newLanguage);
+    
+    if (currentCodingQuestion) {
+      let newTemplate;
+      if (currentCodingQuestion.codeTemplate && currentCodingQuestion.codeTemplate[newLanguage]) {
+        newTemplate = currentCodingQuestion.codeTemplate[newLanguage];
+        addExecutionLog(`✅ Using question bank template for ${newLanguage}`);
+      } else {
+        newTemplate = getCodeTemplate(newLanguage, currentCodingQuestion.functionName || 'solution');
+        addExecutionLog(`✅ Using generated template for ${newLanguage}`);
+      }
+      setCode(newTemplate);
+    }
+  };
+
   // Cleanup
   useEffect(() => {
     return () => {
@@ -964,8 +1718,7 @@ export default function AIInterviewSystemV2({
         position={position}
         interviewMode={interviewMode}
         onTestComplete={(stream: MediaStream) => {
-          console.log('Γ£à Test complete, received stream:', stream, 'Mode:', interviewMode);
-          setTestMediaStream(stream);
+          console.log('✅ Test complete, received stream:', stream, 'Mode:', interviewMode);
           setShowTestPage(false);
           
           // Set media states based on mode
@@ -975,13 +1728,12 @@ export default function AIInterviewSystemV2({
             setIsMicEnabled(false);
           }
           
-          // Initialize interview with time validation
-          setTimeout(async () => {
-            // Validate time window before starting
+          // Validate time window then prepare interview
+          setTimeout(() => {
             const validation = validateTimeWindow();
             
             if (!validation.allowed) {
-              console.error('ΓÅ░ Time window validation failed:', validation.message);
+              console.error('❌ Time window validation failed:', validation.message);
               setTimeValidationError(validation.message || 'Interview cannot start at this time');
               if (onError) {
                 onError(validation.message || 'Interview cannot start at this time');
@@ -989,15 +1741,54 @@ export default function AIInterviewSystemV2({
               return;
             }
 
-            console.log('Γ£à Time window validation passed');
+            console.log('✅ Time window validation passed');
             setTimeValidationError(null);
-            setIsStarted(true);
-            setStartTime(Date.now());
-            await initializeMedia(stream);
-            setTimeout(() => generateAIQuestion(), 1500);
+            
+            // Start preparation flow (shows loading screen)
+            prepareInterview(stream);
           }, 100);
         }}
       />
+    );
+  }
+
+  // Loading Screen
+  if (isPreparingInterview) {
+    return (
+      <div className="fixed inset-0 flex flex-col items-center justify-center bg-slate-900 text-white z-50">
+        <div className="flex flex-col items-center space-y-6">
+          <div className="relative">
+            <div className="w-20 h-20 border-4 border-blue-500/30 border-t-blue-500 rounded-full animate-spin"></div>
+            <div className="absolute inset-0 flex items-center justify-center">
+              <div className="w-12 h-12 bg-blue-500/20 rounded-full animate-pulse"></div>
+            </div>
+          </div>
+          <div className="text-center space-y-2">
+            <h2 className="text-2xl font-bold tracking-tight">Preparing Interview</h2>
+            <p className="text-slate-400">Setting up your interview environment...</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Countdown Screen
+  if (isCountingDown) {
+    return (
+      <div className="fixed inset-0 flex flex-col items-center justify-center bg-slate-900 text-white z-50">
+        <div className="flex flex-col items-center space-y-8">
+          <div className="relative">
+            <div className="text-9xl font-bold font-mono text-transparent bg-clip-text bg-gradient-to-br from-blue-400 to-purple-600 animate-pulse">
+              {countdownValue}
+            </div>
+            <div className="absolute -inset-8 bg-blue-500/20 blur-3xl rounded-full -z-10"></div>
+          </div>
+          <div className="text-center space-y-2">
+            <h2 className="text-2xl font-bold tracking-tight">Get Ready!</h2>
+            <p className="text-slate-400">Interview starting in {countdownValue} seconds</p>
+          </div>
+        </div>
+      </div>
     );
   }
 
@@ -1096,11 +1887,11 @@ export default function AIInterviewSystemV2({
                 <span className="text-gray-300 text-sm font-medium">Code Editor</span>
                 <select
                   value={language}
-                  onChange={(e) => setLanguage(e.target.value)}
+                  onChange={(e) => handleLanguageChange(e.target.value as 'javascript' | 'python' | 'java' | 'cpp')}
                   className="bg-[#3c3c3c] text-gray-300 text-sm px-3 py-1 rounded border border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500"
                 >
-                  <option value="python">Python</option>
                   <option value="javascript">JavaScript</option>
+                  <option value="python">Python</option>
                   <option value="java">Java</option>
                   <option value="cpp">C++</option>
                 </select>
@@ -1161,82 +1952,100 @@ export default function AIInterviewSystemV2({
           {/* Middle: Problem Statement */}
         <div className="w-1/4 flex flex-col bg-gradient-to-r from-purple-50 to-blue-50 border-l border-r border-gray-300">
           <div className="flex-1 overflow-y-auto p-6">
-            <h3 className="text-xl font-bold text-gray-900 mb-4 flex items-center">
-              <span className="w-1 h-6 bg-purple-600 rounded-full mr-3"></span>
-              Palindrome Checker (Two Part)
-            </h3>
-            
-            <div className="text-gray-700 text-sm space-y-4 leading-relaxed">
-                <div className="bg-white/80 p-4 rounded-lg border-l-4 border-purple-500 shadow-sm">
-                  <p className="text-gray-800">A palindrome is a word or phrase that reads the same backward as forward, ignoring spaces, non-alphanumeric characters, and case.</p>
-                  <div className="mt-2 flex items-center space-x-2">
-                    <span className="text-xs font-semibold text-purple-700">Examples:</span>
-                    <code className="bg-purple-100 text-purple-800 px-2 py-1 rounded text-xs font-mono">"madam"</code>
-                    <code className="bg-purple-100 text-purple-800 px-2 py-1 rounded text-xs font-mono">"racecar"</code>
+            {currentCodingQuestion ? (
+              <>
+                <h3 className="text-xl font-bold text-gray-900 mb-4 flex items-center">
+                  <span className="w-1 h-6 bg-purple-600 rounded-full mr-3"></span>
+                  {currentCodingQuestion.title}
+                </h3>
+                
+                <div className="text-gray-700 text-sm space-y-4 leading-relaxed">
+                  <div className="bg-white/80 p-4 rounded-lg border-l-4 border-purple-500 shadow-sm">
+                    <p className="text-gray-800">{currentCodingQuestion.description}</p>
+                    {currentCodingQuestion.constraints && (
+                      <div className="mt-3">
+                        <span className="text-xs font-semibold text-purple-700">Constraints:</span>
+                        <ul className="mt-1 text-xs text-gray-600 list-disc list-inside">
+                          {currentCodingQuestion.constraints.map((constraint: string, index: number) => (
+                            <li key={index}>{constraint}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
                   </div>
+                  
+                  {/* Examples */}
+                  {currentCodingQuestion.examples && currentCodingQuestion.examples.length > 0 && (
+                    <div className="space-y-3">
+                      {currentCodingQuestion.examples.map((example: any, index: number) => (
+                        <details key={index} className="bg-white/90 rounded-lg border border-purple-200 shadow-md" open={index === 0}>
+                          <summary className="cursor-pointer p-4 font-bold text-purple-900 hover:bg-purple-50 rounded-lg transition-colors flex items-center justify-between">
+                            <span className="flex items-center">
+                              <span className="bg-purple-600 text-white w-6 h-6 rounded-full flex items-center justify-center text-xs mr-2">{index + 1}</span>
+                              Example {index + 1}
+                            </span>
+                            <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                              <path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd"/>
+                            </svg>
+                          </summary>
+                          <div className="p-4 pt-0 space-y-2">
+                            <div className="bg-gray-50 p-3 rounded border border-gray-200 relative">
+                              <button
+                                onClick={() => navigator.clipboard.writeText(example.input)}
+                                className="absolute top-2 right-2 bg-white/80 hover:bg-white text-gray-700 border border-gray-200 rounded px-2 py-1 text-xs flex items-center space-x-1 shadow-sm"
+                                title="Copy input"
+                              >
+                                <Copy className="w-3.5 h-3.5" />
+                                <span>Copy</span>
+                              </button>
+                              <div className="space-y-2">
+                                <div>
+                                  <p className="text-xs font-semibold text-gray-600">Input:</p>
+                                  <code className="block bg-gray-800 text-green-400 px-3 py-2 rounded text-xs font-mono mt-1">
+                                    {example.input}
+                                  </code>
+                                </div>
+                                <div>
+                                  <p className="text-xs font-semibold text-gray-600">Output:</p>
+                                  <code className="block bg-gray-800 text-blue-400 px-3 py-2 rounded text-xs font-mono mt-1">
+                                    {example.output}
+                                  </code>
+                                </div>
+                                {example.explanation && (
+                                  <div>
+                                    <p className="text-xs font-semibold text-gray-600">Explanation:</p>
+                                    <p className="text-xs text-gray-700 mt-1">{example.explanation}</p>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        </details>
+                      ))}
+                    </div>
+                  )}
+                  
+                  {/* Function Signature */}
+                  {currentCodingQuestion.functionSignature && (
+                    <div className="bg-white/90 rounded-lg border border-purple-200 shadow-md">
+                      <div className="p-4">
+                        <h4 className="font-bold text-purple-900 mb-2">Function Signature:</h4>
+                        <code className="block bg-gray-800 text-yellow-400 px-3 py-2 rounded text-xs font-mono">
+                          {currentCodingQuestion.functionSignature[language] || currentCodingQuestion.functionSignature.python}
+                        </code>
+                      </div>
+                    </div>
+                  )}
                 </div>
-                
-                {/* Part 1 */}
-                <details className="bg-white/90 rounded-lg border border-purple-200 shadow-md" open>
-                  <summary className="cursor-pointer p-4 font-bold text-purple-900 hover:bg-purple-50 rounded-lg transition-colors flex items-center justify-between">
-                    <span className="flex items-center">
-                      <span className="bg-purple-600 text-white w-6 h-6 rounded-full flex items-center justify-center text-xs mr-2">1</span>
-                      Part 1: Palindrome Checker
-                    </span>
-                    <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
-                      <path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd"/>
-                    </svg>
-                  </summary>
-                  <div className="p-4 pt-0 space-y-2">
-                    <p className="text-gray-700">Write a function that checks if a given string is a palindrome. Return the answer as a boolean.</p>
-                    <div className="bg-gray-50 p-3 rounded border border-gray-200 relative">
-                      <button
-                        onClick={() => navigator.clipboard.writeText('is_palindrome("madam")')}
-                        className="absolute top-2 right-2 bg-white/80 hover:bg-white text-gray-700 border border-gray-200 rounded px-2 py-1 text-xs flex items-center space-x-1 shadow-sm"
-                        title="Copy example"
-                      >
-                        <Copy className="w-3.5 h-3.5" />
-                        <span>Copy</span>
-                      </button>
-                      <p className="text-xs font-semibold text-gray-600 mb-2">Example:</p>
-                      <code className="block bg-gray-800 text-green-400 px-3 py-2 rounded text-xs font-mono">
-                        is_palindrome(<span className="text-yellow-300">"madam"</span>) ΓåÆ <span className="text-blue-300">True</span>
-                      </code>
-                    </div>
-                  </div>
-                </details>
-                
-                {/* Part 2 */}
-                <details className="bg-white/90 rounded-lg border border-purple-200 shadow-md" open>
-                  <summary className="cursor-pointer p-4 font-bold text-purple-900 hover:bg-purple-50 rounded-lg transition-colors flex items-center justify-between">
-                    <span className="flex items-center">
-                      <span className="bg-purple-600 text-white w-6 h-6 rounded-full flex items-center justify-center text-xs mr-2">2</span>
-                      Part 2: Palindrome Checker with Removal
-                    </span>
-                    <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
-                      <path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd"/>
-                    </svg>
-                  </summary>
-                  <div className="p-4 pt-0 space-y-2">
-                    <p className="text-gray-700">Write a function that checks if a given string can be made into a palindrome by removing at most one character. Return the answer as a boolean.</p>
-                    <div className="bg-gray-50 p-3 rounded border border-gray-200 relative">
-                      <button
-                        onClick={() => navigator.clipboard.writeText('can_be_palindrome("race a car")\ncan_be_palindrome("racecar")')}
-                        className="absolute top-2 right-2 bg-white/80 hover:bg-white text-gray-700 border border-gray-200 rounded px-2 py-1 text-xs flex items-center space-x-1 shadow-sm"
-                        title="Copy examples"
-                      >
-                        <Copy className="w-3.5 h-3.5" />
-                        <span>Copy</span>
-                      </button>
-                      <p className="text-xs font-semibold text-gray-600 mb-2">Example:</p>
-                      <code className="block bg-gray-800 text-green-400 px-3 py-2 rounded text-xs font-mono">
-                        can_be_palindrome(<span className="text-yellow-300">"race a car"</span>) ΓåÆ <span className="text-blue-300">False</span><br/>
-                        can_be_palindrome(<span className="text-yellow-300">"racecar"</span>) ΓåÆ <span className="text-blue-300">True</span>
-                      </code>
-                    </div>
-                  </div>
-                </details>
-            </div>
+              </>
+            ) : (
+              <div className="flex items-center justify-center h-full text-gray-500">
+                <div className="text-center">
+                  <div className="w-16 h-16 border-4 border-purple-500/30 border-t-purple-500 rounded-full animate-spin mx-auto mb-4"></div>
+                  <p>Loading coding question...</p>
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
@@ -1798,6 +2607,138 @@ export default function AIInterviewSystemV2({
                   </p>
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Test Results Popup - Slides up from bottom */}
+      {showTestResults && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-end justify-center p-4">
+          <div className="bg-white rounded-t-2xl max-w-4xl w-full max-h-[80vh] overflow-hidden shadow-2xl animate-in slide-in-from-bottom-8 duration-500">
+            <div className="bg-gradient-to-r from-green-50 to-emerald-50 p-6 border-b border-gray-200">
+              <div className="flex items-center justify-between">
+                <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-3">
+                  <div className="w-8 h-8 bg-green-500 rounded-full flex items-center justify-center">
+                    <Play className="w-4 h-4 text-white" />
+                  </div>
+                  🧪 Test Results
+                </h2>
+                <button
+                  onClick={() => setShowTestResults(false)}
+                  className="text-gray-400 hover:text-gray-600 transition-colors p-2"
+                >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+              
+              {/* Summary Stats */}
+              <div className="mt-4 flex items-center gap-6">
+                <div className="flex items-center gap-2">
+                  <div className="w-3 h-3 bg-green-500 rounded-full"></div>
+                  <span className="text-sm font-medium text-green-700">
+                    {testResults.filter((r: any) => r.passed).length} Passed
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-3 h-3 bg-red-500 rounded-full"></div>
+                  <span className="text-sm font-medium text-red-700">
+                    {testResults.filter((r: any) => !r.passed).length} Failed
+                  </span>
+                </div>
+                <div className="text-sm text-gray-600">
+                  Total: {testResults.length} test cases
+                </div>
+                
+                {/* Perfect Score Celebration */}
+                {testResults.filter((r: any) => r.passed).length === testResults.length && testResults.length > 0 && (
+                  <div className="flex items-center gap-2 ml-4 px-3 py-1 bg-green-100 rounded-full border border-green-300">
+                    <span className="text-green-600 text-lg">🎉</span>
+                    <span className="text-sm font-bold text-green-800">Perfect Score!</span>
+                    <span className="text-xs text-green-600">Moving to next question...</span>
+                  </div>
+                )}
+              </div>
+            </div>
+            
+            {/* Test Cases */}
+            <div className="p-6 space-y-4 max-h-96 overflow-y-auto">
+              {testResults.map((result: any, idx: number) => (
+                <div 
+                  key={idx} 
+                  className={`p-4 rounded-xl border-l-4 transition-all ${
+                    result.passed 
+                      ? 'bg-green-50 border-green-500 shadow-sm' 
+                      : 'bg-red-50 border-red-500 shadow-sm'
+                  }`}
+                >
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-3">
+                      <div className={`w-6 h-6 rounded-full flex items-center justify-center text-white text-xs font-bold ${
+                        result.passed ? 'bg-green-500' : 'bg-red-500'
+                      }`}>
+                        {result.passed ? '✓' : '✗'}
+                      </div>
+                      <span className="font-medium text-gray-900">
+                        {result.description || `Test Case ${idx + 1}`}
+                      </span>
+                    </div>
+                    <span className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded">
+                      {result.executionTime || '< 1'}ms
+                    </span>
+                  </div>
+                  
+                  {!result.passed && (
+                    <div className="space-y-2 text-sm">
+                      <div className="bg-white/80 p-3 rounded border">
+                        <p className="font-medium text-red-700 mb-1">Expected:</p>
+                        <code className="text-red-600 font-mono text-xs">
+                          {JSON.stringify(result.expectedOutput)}
+                        </code>
+                      </div>
+                      <div className="bg-white/80 p-3 rounded border">
+                        <p className="font-medium text-red-700 mb-1">Got:</p>
+                        <code className="text-red-600 font-mono text-xs">
+                          {JSON.stringify(result.actualOutput)}
+                        </code>
+                      </div>
+                      {result.error && (
+                        <div className="bg-red-100 p-3 rounded border border-red-200">
+                          <p className="font-medium text-red-700 mb-1">Error:</p>
+                          <p className="text-red-600 text-xs">{result.error}</p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  
+                  {result.passed && (
+                    <div className="text-green-600 text-sm">
+                      ✅ Test passed successfully
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+            
+            {/* Action Buttons */}
+            <div className="bg-gray-50 p-4 flex justify-end gap-3">
+              <button
+                onClick={() => setShowTestResults(false)}
+                className="px-4 py-2 text-gray-600 hover:text-gray-800 transition-colors"
+              >
+                Close
+              </button>
+              <button
+                onClick={() => {
+                  setShowTestResults(false);
+                  handleRunCode();
+                }}
+                className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors"
+              >
+                Run Again
+              </button>
             </div>
           </div>
         </div>
