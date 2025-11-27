@@ -10,6 +10,7 @@ interface Invitation {
   type: string;
   deadline: string;
   status: string;
+  token: string;
 }
 
 interface Interview {
@@ -25,6 +26,22 @@ interface Interview {
 const Dashboard: React.FC = () => {
   const { user } = useAuth();
   const [loading, setLoading] = useState(true);
+
+  // Helper function to get authenticated headers
+  const getAuthHeaders = (): HeadersInit => {
+    const token = localStorage.getItem('token') || sessionStorage.getItem('token') || 
+                 localStorage.getItem('authToken') || sessionStorage.getItem('authToken');
+    
+    const headers: HeadersInit = {
+      'Content-Type': 'application/json'
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    
+    return headers;
+  };
   const [stats, setStats] = useState({
     totalInterviews: 0,
     pendingInvitations: 0,
@@ -42,70 +59,82 @@ const Dashboard: React.FC = () => {
   const fetchDashboardData = async () => {
     setLoading(true);
     try {
-      // TODO: Replace with actual API calls
-      // Simulating API delay
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
-      // Mock data - will be replaced with real API
-      setStats({
-        totalInterviews: 12,
-        pendingInvitations: 3,
-        averageScore: 78,
-        nextInterview: '2 days'
+      const headers = getAuthHeaders();
+
+      // Fetch dashboard stats
+      const statsResponse = await fetch('/api/user/dashboard-stats', {
+        method: 'GET',
+        headers
       });
-      
-      setInvitations([
-        {
-          id: '1',
-          company: 'TechCorp Inc.',
-          position: 'Senior Software Engineer',
-          type: 'Technical Interview',
-          deadline: '2024-10-20',
-          status: 'pending'
-        },
-        {
-          id: '2',
-          company: 'DataSystems Ltd.',
-          position: 'Data Scientist',
-          type: 'Behavioral Interview',
-          deadline: '2024-10-22',
-          status: 'pending'
-        }
-      ]);
-      
-      setUpcomingInterviews([
-        {
-          id: '1',
-          company: 'InnovateTech',
-          position: 'Full Stack Developer',
-          date: '2024-10-18',
-          time: '2:00 PM',
-          status: 'scheduled'
-        }
-      ]);
-      
-      setRecentResults([
-        {
-          id: '1',
-          company: 'CloudSoft',
-          position: 'Backend Engineer',
-          date: '2024-10-10',
-          time: '10:00 AM',
-          status: 'completed',
-          score: 85
-        },
-        {
-          id: '2',
-          company: 'AI Solutions',
-          position: 'ML Engineer',
-          date: '2024-10-08',
-          time: '3:00 PM',
-          status: 'completed',
-          score: 92
-        }
-      ]);
+
+      if (statsResponse.ok) {
+        const statsData = await statsResponse.json();
+        setStats(statsData);
+      } else {
+        console.warn('Failed to fetch stats, using defaults');
+        setStats({
+          totalInterviews: 0,
+          pendingInvitations: 0,
+          averageScore: 0,
+          nextInterview: null
+        });
+      }
+
+      // Fetch invitations  
+      const invitationsResponse = await fetch('/api/user/invitations/pending', {
+        method: 'GET',
+        headers
+      });
+
+      if (invitationsResponse.ok) {
+        const invitationsData = await invitationsResponse.json();
+        setInvitations(invitationsData.invitations || []);
+      } else {
+        console.warn('Failed to fetch invitations');
+        setInvitations([]);
+      }
+
+      // Fetch upcoming interviews
+      const upcomingResponse = await fetch('/api/user/interviews/upcoming', {
+        method: 'GET', 
+        headers
+      });
+
+      if (upcomingResponse.ok) {
+        const upcomingData = await upcomingResponse.json();
+        setUpcomingInterviews(upcomingData.interviews || []);
+      } else {
+        console.warn('Failed to fetch upcoming interviews');
+        setUpcomingInterviews([]);
+      }
+
+      // Fetch recent results
+      const resultsResponse = await fetch('/api/user/interviews/results', {
+        method: 'GET',
+        headers
+      });
+
+      if (resultsResponse.ok) {
+        const resultsData = await resultsResponse.json();
+        setRecentResults(resultsData.results || []);
+      } else {
+        console.warn('Failed to fetch interview results');
+        setRecentResults([]);
+      }
+
     } catch (error) {
       console.error('Error fetching dashboard data:', error);
+      
+      // Fallback to empty data instead of mock data
+      setStats({
+        totalInterviews: 0,
+        pendingInvitations: 0,
+        averageScore: 0,
+        nextInterview: null
+      });
+      setInvitations([]);
+      setUpcomingInterviews([]);
+      setRecentResults([]);
     } finally {
       setLoading(false);
     }
@@ -118,14 +147,41 @@ const Dashboard: React.FC = () => {
     return 'Good evening';
   };
 
-  const handleAcceptInvitation = async (id: string) => {
-    // TODO: API call to accept invitation
-    console.log('Accepting invitation:', id);
+  const handleAcceptInvitation = (invitation: Invitation) => {
+    // Redirect to the proper invitation acceptance page
+    // This page has time slot selection, resume upload, and full invitation flow
+    if (invitation.token) {
+      window.location.href = `/invitation/accept/${invitation.token}`;
+    } else {
+      console.error('❌ Invitation token not found');
+      alert('Cannot access invitation - missing token');
+    }
   };
 
   const handleDeclineInvitation = async (id: string) => {
-    // TODO: API call to decline invitation
-    console.log('Declining invitation:', id);
+    try {
+      const reason = prompt('Please provide a reason for declining (optional):');
+      const headers = getAuthHeaders();
+
+      const response = await fetch(`/api/invitation/${id}/decline-by-id`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ reason: reason || 'No reason provided' })
+      });
+
+      if (response.ok) {
+        console.log('✅ Invitation declined successfully');
+        // Refresh dashboard data to reflect changes
+        fetchDashboardData();
+      } else {
+        const errorData = await response.json();
+        console.error('❌ Failed to decline invitation:', errorData.error);
+        alert('Failed to decline invitation: ' + errorData.error);
+      }
+    } catch (error) {
+      console.error('❌ Error declining invitation:', error);
+      alert('An error occurred while declining the invitation');
+    }
   };
 
   if (loading) {
@@ -205,19 +261,19 @@ const Dashboard: React.FC = () => {
 
         {/* Quick Actions */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-          <Link to="/interview" className="group">
+          <Link to="/test-interview" className="group">
             <div className="bg-gradient-to-br from-blue-50 to-blue-100 border border-blue-200 rounded-xl p-6 hover:shadow-lg transition-all">
               <div className="flex items-center justify-between mb-4">
                 <div className="w-12 h-12 bg-blue-500 rounded-lg flex items-center justify-center group-hover:scale-110 transition-transform">
                   <Play className="w-6 h-6 text-white" />
                 </div>
               </div>
-              <h3 className="text-lg font-semibold text-gray-900 mb-1">Start Interview</h3>
-              <p className="text-gray-600 text-sm">Begin your AI-powered interview</p>
+              <h3 className="text-lg font-semibold text-gray-900 mb-1">Demo Interview</h3>
+              <p className="text-gray-600 text-sm">Try our AI-powered interview demo</p>
             </div>
           </Link>
 
-          <div className="group cursor-pointer">
+          <Link to="/interview-results" className="group">
             <div className="bg-gradient-to-br from-green-50 to-green-100 border border-green-200 rounded-xl p-6 hover:shadow-lg transition-all">
               <div className="flex items-center justify-between mb-4">
                 <div className="w-12 h-12 bg-green-500 rounded-lg flex items-center justify-center group-hover:scale-110 transition-transform">
@@ -227,9 +283,9 @@ const Dashboard: React.FC = () => {
               <h3 className="text-lg font-semibold text-gray-900 mb-1">View Results</h3>
               <p className="text-gray-600 text-sm">Check your interview evaluations</p>
             </div>
-          </div>
+          </Link>
 
-          <div className="group cursor-pointer">
+          <Link to="/practice-mode" className="group">
             <div className="bg-gradient-to-br from-purple-50 to-purple-100 border border-purple-200 rounded-xl p-6 hover:shadow-lg transition-all">
               <div className="flex items-center justify-between mb-4">
                 <div className="w-12 h-12 bg-purple-500 rounded-lg flex items-center justify-center group-hover:scale-110 transition-transform">
@@ -239,9 +295,9 @@ const Dashboard: React.FC = () => {
               <h3 className="text-lg font-semibold text-gray-900 mb-1">Practice Mode</h3>
               <p className="text-gray-600 text-sm">Practice with sample questions</p>
             </div>
-          </div>
+          </Link>
 
-          <div className="group cursor-pointer">
+          <Link to="/profile-settings" className="group">
             <div className="bg-gradient-to-br from-orange-50 to-orange-100 border border-orange-200 rounded-xl p-6 hover:shadow-lg transition-all">
               <div className="flex items-center justify-between mb-4">
                 <div className="w-12 h-12 bg-orange-500 rounded-lg flex items-center justify-center group-hover:scale-110 transition-transform">
@@ -251,7 +307,7 @@ const Dashboard: React.FC = () => {
               <h3 className="text-lg font-semibold text-gray-900 mb-1">Profile Settings</h3>
               <p className="text-gray-600 text-sm">Update your profile & resume</p>
             </div>
-          </div>
+          </Link>
         </div>
 
         {/* Interview Tips */}
@@ -327,7 +383,7 @@ const Dashboard: React.FC = () => {
                     </div>
                     <div className="flex space-x-2">
                       <button
-                        onClick={() => handleAcceptInvitation(invitation.id)}
+                        onClick={() => handleAcceptInvitation(invitation)}
                         className="flex-1 bg-green-50 hover:bg-green-100 border border-green-200 text-green-700 py-2 rounded-lg text-sm font-medium transition-all"
                       >
                         <CheckCircle className="w-4 h-4 inline mr-1" />
@@ -378,7 +434,7 @@ const Dashboard: React.FC = () => {
                       <Calendar className="w-4 h-4 mr-2" />
                       {new Date(interview.date).toLocaleDateString()} at {interview.time}
                     </div>
-                    <Link to={`/interview/${interview.id}`}>
+                    <Link to={`/test-interview`}>
                       <button className="w-full bg-blue-500 hover:bg-blue-600 text-white py-2 rounded-lg text-sm font-medium transition-all">
                         Join Interview
                       </button>

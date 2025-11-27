@@ -128,6 +128,7 @@ export default function AIInterviewSystemV2({
   const [showTextFallback, setShowTextFallback] = useState(false);
   const [isReadyForUser, setIsReadyForUser] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
+  const [showCompletionScreen, setShowCompletionScreen] = useState(false);
   
   // Audio system refs
   const finalTranscriptRef = useRef('');
@@ -1867,7 +1868,7 @@ void ${functionName}() {
 </div>
     {/* End Interview Button */}
     <button 
-      onClick={completeInterview}
+      onClick={handleEndInterview}
       className="bg-red-500 hover:bg-red-600 text-white px-4 py-1.5 rounded-lg text-xs font-semibold transition-colors shadow-sm"
     >
       End Interview

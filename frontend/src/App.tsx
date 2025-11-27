@@ -24,6 +24,9 @@ import TestVerification from './pages/TestVerification'; // Test face verificati
 import TestVerificationDeepFace from './pages/TestVerificationDeepFace'; // Test DeepFace verification
 import InterviewTest from './pages/InterviewTest';
 import CodingChallengeTest from './pages/CodingChallengeTest'; // Test interview system
+import InterviewResults from './pages/InterviewResults';
+import PracticeMode from './pages/PracticeMode';
+import ProfileSettings from './pages/ProfileSettings';
 import { AuthProvider } from './contexts/AuthContext';
 
 // Get the Clerk publishable key from environment variables
@@ -70,6 +73,9 @@ function App() {
               
               {/* Protected Routes - Interviewee */}
               <Route path="/dashboard" element={<ProtectedIntervieweeRoute><Layout><Dashboard /></Layout></ProtectedIntervieweeRoute>} />
+              <Route path="/interview-results" element={<ProtectedIntervieweeRoute><Layout><InterviewResults /></Layout></ProtectedIntervieweeRoute>} />
+              <Route path="/practice-mode" element={<ProtectedIntervieweeRoute><Layout><PracticeMode /></Layout></ProtectedIntervieweeRoute>} />
+              <Route path="/profile-settings" element={<ProtectedIntervieweeRoute><Layout><ProfileSettings /></Layout></ProtectedIntervieweeRoute>} />
               
               {/* Interview Routes - Full screen without Layout */}
               <Route path="/interview" element={<ProtectedIntervieweeRoute><Interview /></ProtectedIntervieweeRoute>} />

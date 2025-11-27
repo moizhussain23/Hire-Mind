@@ -114,7 +114,7 @@ unknow/
 unknow/*
 unknown/
 unknown/*
-
+AGENTS.md
 # Database files
 *.db
 *.sqlite

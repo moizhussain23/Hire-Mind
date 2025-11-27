@@ -603,6 +603,151 @@ export const getCandidateInvitations = async (req: AuthRequest, res: Response): 
 }
 
 /**
+ * Accept invitation by ID (for dashboard operations)
+ */
+export const acceptInvitationById = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { id } = req.params
+    const userId = req.auth?.userId
+
+    if (!userId) {
+      res.status(401).json({
+        success: false,
+        error: 'User not authenticated'
+      })
+      return
+    }
+
+    // Get user email
+    const user = await User.findOne({ clerkId: userId })
+    if (!user) {
+      res.status(404).json({
+        success: false,
+        error: 'User not found'
+      })
+      return
+    }
+
+    // Find invitation by ID and verify ownership
+    const invitation = await Invitation.findOne({ 
+      _id: id,
+      candidateEmail: user.email,
+      status: 'pending'
+    })
+
+    if (!invitation) {
+      res.status(404).json({
+        success: false,
+        error: 'Invitation not found or already processed'
+      })
+      return
+    }
+
+    // Check if expired
+    if (invitation.isExpired()) {
+      res.status(400).json({
+        success: false,
+        error: 'Invitation has expired'
+      })
+      return
+    }
+
+    // Update invitation status
+    invitation.status = 'accepted'
+    invitation.acceptedAt = new Date()
+    await invitation.save()
+
+    res.status(200).json({
+      success: true,
+      message: 'Invitation accepted successfully',
+      data: {
+        invitationId: invitation._id,
+        status: 'accepted'
+      }
+    })
+  } catch (error) {
+    console.error('Error accepting invitation by ID:', error)
+    res.status(500).json({
+      success: false,
+      error: 'Failed to accept invitation'
+    })
+  }
+}
+
+/**
+ * Decline invitation by ID (for dashboard operations)
+ */
+export const declineInvitationById = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { id } = req.params
+    const { reason } = req.body
+    const userId = req.auth?.userId
+
+    if (!userId) {
+      res.status(401).json({
+        success: false,
+        error: 'User not authenticated'
+      })
+      return
+    }
+
+    // Get user email
+    const user = await User.findOne({ clerkId: userId })
+    if (!user) {
+      res.status(404).json({
+        success: false,
+        error: 'User not found'
+      })
+      return
+    }
+
+    // Find invitation by ID and verify ownership
+    const invitation = await Invitation.findOne({ 
+      _id: id,
+      candidateEmail: user.email,
+      status: 'pending'
+    })
+
+    if (!invitation) {
+      res.status(404).json({
+        success: false,
+        error: 'Invitation not found or already processed'
+      })
+      return
+    }
+
+    // Check if expired
+    if (invitation.isExpired()) {
+      res.status(400).json({
+        success: false,
+        error: 'Invitation has expired'
+      })
+      return
+    }
+
+    // Update invitation status
+    invitation.status = 'declined'
+    invitation.declinedAt = new Date()
+    await invitation.save()
+
+    res.status(200).json({
+      success: true,
+      message: 'Invitation declined successfully',
+      data: {
+        invitationId: invitation._id,
+        status: 'declined'
+      }
+    })
+  } catch (error) {
+    console.error('Error declining invitation by ID:', error)
+    res.status(500).json({
+      success: false,
+      error: 'Failed to decline invitation'
+    })
+  }
+}
+
+/**
  * Generate unique invitation token
  */
 export function generateInvitationToken(): string {

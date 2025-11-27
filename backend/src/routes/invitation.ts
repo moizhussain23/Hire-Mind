@@ -4,7 +4,9 @@ import {
   getInvitationByToken,
   acceptInvitation,
   declineInvitation,
-  getCandidateInvitations
+  getCandidateInvitations,
+  acceptInvitationById,
+  declineInvitationById
 } from '../controllers/invitation'
 
 const router = Router()
@@ -16,5 +18,9 @@ router.get('/:token', getInvitationByToken)
 router.post('/:token/accept', authenticateToken, acceptInvitation)
 router.post('/:token/decline', authenticateToken, declineInvitation)
 router.get('/candidate/list', authenticateToken, getCandidateInvitations)
+
+// Dashboard routes - for direct ID-based operations
+router.post('/:id/accept-by-id', authenticateToken, acceptInvitationById)
+router.post('/:id/decline-by-id', authenticateToken, declineInvitationById)
 
 export default router
